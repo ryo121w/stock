@@ -102,6 +102,9 @@ grade: ## Grade past predictions with actual prices
 grade-report: ## Show accuracy report only (no grading)
 	$(PYTHON) scripts/grade_predictions.py --report
 
+backfill: ## Backfill historical predictions + grade immediately
+	$(PYTHON) scripts/backfill_predictions.py
+
 # ── Cleanup ──────────────────────────────────────────────────────────
 clean: ## Remove caches and build artifacts
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

@@ -318,5 +318,116 @@ def stale():
             click.echo("All data is fresh.")
 
 
+@db.command()
+def predictions():
+    """Show recent predictions and grading results."""
+    from qtp.data.database import QTPDatabase
+
+    database = QTPDatabase(Path("data/qtp.db"))
+    console = _get_console()
+
+    recent = database.get_recent_predictions(limit=20)
+    ungraded = database.get_ungraded_predictions()
+
+    if console:
+        from rich.table import Table
+
+        table = Table(title=f"Recent Predictions ({len(ungraded)} ungraded)", show_lines=False)
+        table.add_column("Date", style="dim")
+        table.add_column("Ticker", style="cyan bold")
+        table.add_column("Dir", justify="center")
+        table.add_column("Conf", justify="right")
+        table.add_column("Actual", justify="right")
+        table.add_column("Result", justify="center")
+
+        for p in recent:
+            direction = "[green]UP[/]" if p["direction"] == 1 else "[red]DOWN[/]"
+            conf = f"{p['confidence']:.1%}"
+            if p.get("actual_return") is not None:
+                actual = f"{p['actual_return']:+.2%}"
+                result = "[bold green]OK[/]" if p.get("is_correct") else "[bold red]NG[/]"
+            else:
+                actual = "[dim]—[/]"
+                result = "[dim]pending[/]"
+            table.add_row(str(p["prediction_date"]), p["ticker"], direction, conf, actual, result)
+
+        console.print(table)
+    else:
+        for p in recent:
+            status = "OK" if p.get("is_correct") else ("NG" if p.get("is_correct") == 0 else "?")
+            click.echo(
+                f"  {p['prediction_date']} {p['ticker']} "
+                f"{'UP' if p['direction'] == 1 else 'DN'} {p['confidence']:.1%} → {status}"
+            )
+
+
+@db.command()
+def accuracy():
+    """Show prediction accuracy report."""
+    from qtp.data.database import QTPDatabase
+
+    database = QTPDatabase(Path("data/qtp.db"))
+    console = _get_console()
+
+    summary = database.get_accuracy_summary()
+    if not summary or not summary.get("total"):
+        click.echo("No graded predictions yet. Run: make grade")
+        return
+
+    if console:
+        from rich.table import Table
+
+        console.print(
+            f"\n[bold]Overall Accuracy: {summary['accuracy']:.1%}[/] "
+            f"({summary['correct']}/{summary['total']})"
+        )
+        if summary.get("avg_return"):
+            console.print(f"Avg Return: {summary['avg_return']:+.3%}")
+
+        # By confidence
+        by_conf = database.get_accuracy_by_confidence()
+        if by_conf:
+            t = Table(title="Accuracy by Confidence", show_lines=False)
+            t.add_column("Bucket")
+            t.add_column("Total", justify="right")
+            t.add_column("Accuracy", justify="right", style="green")
+            t.add_column("Avg Return", justify="right")
+            for b in by_conf:
+                t.add_row(
+                    b["bucket"], str(b["total"]), f"{b['accuracy_pct']}%", f"{b['avg_return_pct']}%"
+                )
+            console.print(t)
+
+        # By ticker
+        by_ticker = database.get_accuracy_by_ticker()
+        if by_ticker:
+            t = Table(title="Accuracy by Ticker", show_lines=False)
+            t.add_column("Ticker", style="cyan")
+            t.add_column("Total", justify="right")
+            t.add_column("Accuracy", justify="right", style="green")
+            t.add_column("Avg Return", justify="right")
+            for b in by_ticker:
+                t.add_row(
+                    b["ticker"], str(b["total"]), f"{b['accuracy_pct']}%", f"{b['avg_return_pct']}%"
+                )
+            console.print(t)
+    else:
+        click.echo(f"Accuracy: {summary['accuracy']:.1%} ({summary['correct']}/{summary['total']})")
+
+
+@main.command()
+def grade():
+    """Grade past predictions with actual prices."""
+    setup_logging()
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "scripts/grade_predictions.py"],
+        capture_output=False,
+    )
+    raise SystemExit(result.returncode)
+
+
 if __name__ == "__main__":
     main()

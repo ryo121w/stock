@@ -89,6 +89,19 @@ db-best: ## Show best experiments
 db-stale: ## Show stale alternative data
 	$(QTP) db stale
 
+db-predictions: ## Show recent predictions
+	$(QTP) db predictions
+
+db-accuracy: ## Show prediction accuracy report
+	$(QTP) db accuracy
+
+# ── Prediction Grading ───────────────────────────────────────────────
+grade: ## Grade past predictions with actual prices
+	$(PYTHON) scripts/grade_predictions.py
+
+grade-report: ## Show accuracy report only (no grading)
+	$(PYTHON) scripts/grade_predictions.py --report
+
 # ── Cleanup ──────────────────────────────────────────────────────────
 clean: ## Remove caches and build artifacts
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

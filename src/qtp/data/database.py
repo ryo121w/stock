@@ -82,6 +82,30 @@ CREATE TABLE IF NOT EXISTS experiments (
 CREATE INDEX IF NOT EXISTS idx_exp_auc ON experiments(wf_auc);
 CREATE INDEX IF NOT EXISTS idx_exp_created ON experiments(created_at);
 
+-- Prediction tracking & grading
+CREATE TABLE IF NOT EXISTS predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    prediction_date TEXT NOT NULL,       -- Date the prediction is FOR
+    horizon INTEGER NOT NULL DEFAULT 1,  -- Prediction horizon in days
+    direction INTEGER NOT NULL,          -- 1=up, 0=down
+    confidence REAL NOT NULL,            -- Model confidence [0, 1]
+    predicted_magnitude REAL,            -- Expected return magnitude
+    model_version TEXT,
+    -- Grading (filled in later by grade_predictions)
+    actual_price_start REAL,             -- Price on prediction_date
+    actual_price_end REAL,               -- Price on prediction_date + horizon
+    actual_return REAL,                  -- Actual return over horizon
+    is_correct INTEGER,                  -- 1=direction correct, 0=wrong
+    graded_at TIMESTAMP,
+    -- Metadata
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(ticker, prediction_date, model_version)
+);
+CREATE INDEX IF NOT EXISTS idx_pred_ticker ON predictions(ticker);
+CREATE INDEX IF NOT EXISTS idx_pred_date ON predictions(prediction_date);
+CREATE INDEX IF NOT EXISTS idx_pred_graded ON predictions(graded_at);
+
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_info (
     key TEXT PRIMARY KEY,
@@ -363,5 +387,184 @@ class QTPDatabase:
                 f"""SELECT * FROM experiments WHERE id IN ({placeholders})
                     ORDER BY wf_auc DESC""",
                 exp_ids,
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # =========================================================================
+    # Prediction Tracking
+    # =========================================================================
+
+    def save_prediction(
+        self,
+        ticker: str,
+        prediction_date: str,
+        direction: int,
+        confidence: float,
+        predicted_magnitude: float | None = None,
+        model_version: str | None = None,
+        horizon: int = 1,
+    ) -> None:
+        """Save a model prediction for later grading."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO predictions
+                   (ticker, prediction_date, horizon, direction, confidence,
+                    predicted_magnitude, model_version)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    ticker,
+                    prediction_date,
+                    horizon,
+                    direction,
+                    confidence,
+                    predicted_magnitude,
+                    model_version,
+                ),
+            )
+
+    def save_predictions_batch(self, predictions: list[dict]) -> int:
+        """Save multiple predictions at once. Returns count saved."""
+        with self._conn() as conn:
+            for p in predictions:
+                conn.execute(
+                    """INSERT OR REPLACE INTO predictions
+                       (ticker, prediction_date, horizon, direction, confidence,
+                        predicted_magnitude, model_version)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        p["ticker"],
+                        p["prediction_date"],
+                        p.get("horizon", 1),
+                        p["direction"],
+                        p["confidence"],
+                        p.get("predicted_magnitude"),
+                        p.get("model_version"),
+                    ),
+                )
+        return len(predictions)
+
+    def get_ungraded_predictions(self) -> list[dict]:
+        """Get predictions that haven't been graded yet."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT id, ticker, prediction_date, horizon, direction,
+                          confidence, predicted_magnitude, model_version
+                   FROM predictions
+                   WHERE graded_at IS NULL
+                   ORDER BY prediction_date""",
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def grade_prediction(
+        self,
+        prediction_id: int,
+        actual_price_start: float,
+        actual_price_end: float,
+    ) -> None:
+        """Grade a prediction with actual price data."""
+        actual_return = (actual_price_end - actual_price_start) / actual_price_start
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT direction FROM predictions WHERE id=?",
+                (prediction_id,),
+            ).fetchone()
+            if not row:
+                return
+
+            predicted_up = row["direction"] == 1
+            actual_up = actual_return > 0
+            is_correct = 1 if (predicted_up == actual_up) else 0
+
+            conn.execute(
+                """UPDATE predictions SET
+                     actual_price_start=?, actual_price_end=?,
+                     actual_return=?, is_correct=?, graded_at=?
+                   WHERE id=?""",
+                (
+                    actual_price_start,
+                    actual_price_end,
+                    actual_return,
+                    is_correct,
+                    datetime.now().isoformat(),
+                    prediction_id,
+                ),
+            )
+
+    def get_accuracy_summary(self, days: int | None = None) -> dict:
+        """Get prediction accuracy summary.
+
+        Args:
+            days: If set, only look at predictions from the last N days.
+        """
+        where = "WHERE graded_at IS NOT NULL"
+        params: list = []
+        if days:
+            where += " AND prediction_date > date('now', ?)"
+            params.append(f"-{days} days")
+
+        with self._conn() as conn:
+            row = conn.execute(
+                f"""SELECT
+                      COUNT(*) as total,
+                      SUM(is_correct) as correct,
+                      AVG(is_correct) as accuracy,
+                      AVG(actual_return) as avg_return,
+                      AVG(CASE WHEN is_correct=1 THEN actual_return END) as avg_win,
+                      AVG(CASE WHEN is_correct=0 THEN actual_return END) as avg_loss,
+                      AVG(confidence) as avg_confidence
+                    FROM predictions {where}""",
+                params,
+            ).fetchone()
+        return dict(row) if row else {}
+
+    def get_accuracy_by_confidence(self) -> list[dict]:
+        """Get accuracy broken down by confidence bucket."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT
+                      CASE
+                        WHEN confidence >= 0.70 THEN '70-100%'
+                        WHEN confidence >= 0.60 THEN '60-70%'
+                        WHEN confidence >= 0.55 THEN '55-60%'
+                        ELSE '50-55%'
+                      END as bucket,
+                      COUNT(*) as total,
+                      SUM(is_correct) as correct,
+                      ROUND(AVG(is_correct) * 100, 1) as accuracy_pct,
+                      ROUND(AVG(actual_return) * 100, 3) as avg_return_pct
+                    FROM predictions
+                    WHERE graded_at IS NOT NULL
+                    GROUP BY bucket
+                    ORDER BY bucket DESC""",
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_accuracy_by_ticker(self) -> list[dict]:
+        """Get accuracy broken down by ticker."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT
+                      ticker,
+                      COUNT(*) as total,
+                      SUM(is_correct) as correct,
+                      ROUND(AVG(is_correct) * 100, 1) as accuracy_pct,
+                      ROUND(AVG(actual_return) * 100, 3) as avg_return_pct
+                    FROM predictions
+                    WHERE graded_at IS NOT NULL
+                    GROUP BY ticker
+                    ORDER BY accuracy_pct DESC""",
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_recent_predictions(self, limit: int = 20) -> list[dict]:
+        """Get recent predictions with grading results."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT ticker, prediction_date, horizon, direction, confidence,
+                          predicted_magnitude, actual_return, is_correct, model_version
+                   FROM predictions
+                   ORDER BY prediction_date DESC, ticker
+                   LIMIT ?""",
+                (limit,),
             ).fetchall()
         return [dict(r) for r in rows]

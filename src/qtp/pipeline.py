@@ -289,7 +289,19 @@ class PipelineRunner:
             except Exception as e:
                 logger.error("predict_failed", ticker=ticker, error=str(e))
 
-        logger.info("predictions_generated", count=len(predictions))
+        # Save predictions to SQLite for later grading
+        for p in predictions:
+            self.db.save_prediction(
+                ticker=p.ticker,
+                prediction_date=p.prediction_date.isoformat(),
+                direction=p.direction,
+                confidence=p.direction_proba,
+                predicted_magnitude=p.magnitude,
+                model_version=p.model_version,
+                horizon=self.config.labels.horizon,
+            )
+
+        logger.info("predictions_generated", count=len(predictions), saved_to_db=True)
         return predictions
 
     def run_all(self, fast: bool = False) -> dict:

@@ -1,0 +1,26 @@
+# Phase 2 tuned: based on backfill accuracy analysis
+# - UNH removed (46.3% accuracy, below random)
+# - Confidence threshold raised to 0.55
+labels:
+  horizon: 5
+  direction_threshold: 0.02
+
+features:
+  tiers: [1, 2, 3, 4, 5]
+  max_features: 50
+
+universe:
+  tickers:
+    - "AAPL"
+    - "MSFT"
+    - "GOOGL"
+    - "AMZN"
+    - "NVDA"
+    - "META"
+    - "TSLA"
+    - "JPM"
+    - "V"
+    # UNH removed: 46.3% accuracy (below random)
+
+backtest:
+  confidence_threshold: 0.55

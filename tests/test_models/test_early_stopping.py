@@ -9,6 +9,8 @@ import pytest
 from qtp.models.lgbm import LGBMPipeline
 from qtp.models.xgb import XGBPipeline
 
+pytestmark = pytest.mark.slow  # These tests train actual models (~3-5s each)
+
 
 def _make_training_data(n: int = 500, n_features: int = 5, seed: int = 42):
     """Generate synthetic classification/regression data."""
@@ -34,10 +36,12 @@ class TestLGBMEarlyStopping:
         model.fit(X, y_dir, y_mag)
 
         # With 1000 max estimators and weak signal, early stopping should kick in
-        assert model.clf.best_iteration_ < model.clf.n_estimators, \
+        assert model.clf.best_iteration_ < model.clf.n_estimators, (
             f"Classifier did not early stop: best={model.clf.best_iteration_}, max={model.clf.n_estimators}"
-        assert model.reg.best_iteration_ < model.reg.n_estimators, \
+        )
+        assert model.reg.best_iteration_ < model.reg.n_estimators, (
             f"Regressor did not early stop: best={model.reg.best_iteration_}, max={model.reg.n_estimators}"
+        )
 
     def test_uses_validation_split(self):
         """Verify the model trains on ~80% and validates on ~20%."""
@@ -73,10 +77,12 @@ class TestXGBEarlyStopping:
         model.fit(X, y_dir, y_mag)
 
         max_est = model.clf.n_estimators
-        assert model.clf.best_iteration < max_est, \
+        assert model.clf.best_iteration < max_est, (
             f"Classifier did not early stop: best={model.clf.best_iteration}, max={max_est}"
-        assert model.reg.best_iteration < max_est, \
+        )
+        assert model.reg.best_iteration < max_est, (
             f"Regressor did not early stop: best={model.reg.best_iteration}, max={max_est}"
+        )
 
     def test_predictions_after_fit(self):
         """Model produces valid predictions after training with early stopping."""

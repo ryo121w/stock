@@ -31,8 +31,11 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov",
+    "pytest-xdist",
     "ruff",
     "mypy",
+    "pre-commit",
+    "rich",
     "ipykernel",
 ]
 
@@ -52,7 +55,25 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+ignore = ["E501"]  # Line length handled by formatter, not linter
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests that require data/network",
+]
+addopts = "-m 'not slow and not integration'"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

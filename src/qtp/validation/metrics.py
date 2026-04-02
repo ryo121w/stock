@@ -6,7 +6,12 @@ from dataclasses import dataclass
 
 import numpy as np
 from sklearn.metrics import (
-    accuracy_score, f1_score, log_loss, precision_score, recall_score, roc_auc_score,
+    accuracy_score,
+    f1_score,
+    log_loss,
+    precision_score,
+    recall_score,
+    roc_auc_score,
 )
 
 
@@ -94,12 +99,14 @@ def compute_metrics(
 
         win_rate = len(wins) / len(trade_returns) if len(trade_returns) > 0 else 0
         profit_factor = (
-            abs(wins.sum() / losses.sum()) if len(losses) > 0 and losses.sum() != 0 else float("inf")
+            abs(wins.sum() / losses.sum())
+            if len(losses) > 0 and losses.sum() != 0
+            else float("inf")
         )
 
         # Sharpe (annualized)
         if trade_returns.std() > 0:
-            sharpe = (trade_returns.mean() / trade_returns.std()) * (252 ** 0.5)
+            sharpe = (trade_returns.mean() / trade_returns.std()) * (252**0.5)
         else:
             sharpe = 0.0
 
@@ -115,8 +122,14 @@ def compute_metrics(
         max_dd = 0.0
 
     return EvaluationMetrics(
-        accuracy=acc, precision=prec, recall=rec, f1=f1,
-        auc_roc=auc, log_loss_val=ll,
-        sharpe_ratio=sharpe, max_drawdown=max_dd,
-        win_rate=win_rate, profit_factor=profit_factor,
+        accuracy=acc,
+        precision=prec,
+        recall=rec,
+        f1=f1,
+        auc_roc=auc,
+        log_loss_val=ll,
+        sharpe_ratio=sharpe,
+        max_drawdown=max_dd,
+        win_rate=win_rate,
+        profit_factor=profit_factor,
     )

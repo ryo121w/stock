@@ -31,7 +31,6 @@ class ModelStore:
 
     def load(self, version: str) -> ModelWrapper:
         model_dir = self.base_dir / version
-        metadata = json.loads((model_dir / "metadata.json").read_text())
         model_type = version.split("_")[0]
         cls = MODEL_CLASSES.get(model_type, LGBMPipeline)
         return cls.load(model_dir)

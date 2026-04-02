@@ -35,3 +35,16 @@ Thumbs.db
 
 # uv
 uv.lock
+
+# SQLite
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+coverage.xml
+.coverage

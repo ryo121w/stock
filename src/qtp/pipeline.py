@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import polars as pl
 import structlog
 
 from qtp.config import PipelineConfig
+from qtp.data.database import QTPDatabase
 from qtp.data.fetchers.base import FetchRequest, Market
 from qtp.data.fetchers.yfinance_ import YFinanceFetcher
 from qtp.data.storage import ParquetStorage
@@ -35,14 +37,16 @@ class PipelineRunner:
         self.validator = DataValidator()
         self.market = Market(config.universe.market)
         self.universe = Universe(config.universe)
-        self.model_store = ModelStore(
-            self.project_dir / config.data.storage_dir / "models"
-        )
+        self.model_store = ModelStore(self.project_dir / config.data.storage_dir / "models")
 
         # Import feature definitions (triggers registration)
         import qtp.features.tier1_momentum  # noqa: F401
         import qtp.features.tier2_volatility  # noqa: F401
+        import qtp.features.tier3_fundamental  # noqa: F401
+        import qtp.features.tier4_macro  # noqa: F401
+        import qtp.features.tier5_alternative  # noqa: F401
 
+        self.db = QTPDatabase(self.project_dir / config.data.storage_dir / "qtp.db")
         self.feature_engine = FeatureEngine(FeatureRegistry.instance(), self.storage)
 
     def _create_fetcher(self):
@@ -59,10 +63,14 @@ class PipelineRunner:
         for ticker in self.universe:
             logger.info("fetching", ticker=ticker)
             try:
-                df = fetcher.fetch_ohlcv(FetchRequest(
-                    ticker=ticker, market=self.market,
-                    start_date=start, end_date=today,
-                ))
+                df = fetcher.fetch_ohlcv(
+                    FetchRequest(
+                        ticker=ticker,
+                        market=self.market,
+                        start_date=start,
+                        end_date=today,
+                    )
+                )
                 result = self.validator.validate_ohlcv(df, as_of=today)
                 if not result.passed:
                     logger.warning("validation_failed", ticker=ticker, issues=result.issues)
@@ -71,8 +79,13 @@ class PipelineRunner:
             except Exception as e:
                 logger.error("fetch_failed", ticker=ticker, error=str(e))
 
-    def run_train(self) -> str:
-        """Train model and return version string."""
+    def run_train(self, fast: bool = False) -> str:
+        """Train model and return version string.
+
+        Args:
+            fast: If True, limit Walk-Forward CV to 3 folds for quick iteration.
+        """
+        t0 = time.monotonic()
         today = date.today()
         tiers = self.config.features.tiers
 
@@ -83,6 +96,7 @@ class PipelineRunner:
             as_of=today,
             tiers=tiers,
             horizon=self.config.labels.horizon,
+            direction_threshold=self.config.labels.direction_threshold,
         )
 
         if dataset.height == 0:
@@ -96,8 +110,12 @@ class PipelineRunner:
         y_direction = dataset["label_direction"]
         y_magnitude = dataset["label_magnitude"]
 
-        logger.info("training_dataset", rows=X.height, features=len(feature_cols),
-                     tickers=len(self.universe))
+        logger.info(
+            "training_dataset",
+            rows=X.height,
+            features=len(feature_cols),
+            tickers=len(self.universe),
+        )
 
         # Train
         model = LGBMPipeline()
@@ -118,8 +136,14 @@ class PipelineRunner:
         commission_bps = self.config.backtest.commission_pct * 100  # to bps
         slippage_bps = self.config.backtest.slippage_pct * 100
 
+        max_wf_folds = 3 if fast else None
+        if fast:
+            logger.info("fast_mode", max_wf_folds=max_wf_folds, skip_pkf=True)
+
         wf_metrics: list[EvaluationMetrics] = []
         for fold_i, (train_idx, test_idx) in enumerate(wf_cv.split(X_np)):
+            if max_wf_folds and fold_i >= max_wf_folds:
+                break
             fold_model = LGBMPipeline()
             fold_model.fit(
                 X[train_idx],
@@ -130,38 +154,48 @@ class PipelineRunner:
             pred_mag = np.array(fold_model.predict_magnitude(X[test_idx]))
 
             metrics = compute_metrics(
-                y_dir_np[test_idx], pred_proba,
-                y_mag_np[test_idx], pred_mag,
+                y_dir_np[test_idx],
+                pred_proba,
+                y_mag_np[test_idx],
+                pred_mag,
                 commission_bps=commission_bps,
                 slippage_bps=slippage_bps,
             )
             wf_metrics.append(metrics)
-            logger.info("wf_fold", fold=fold_i, train=len(train_idx),
-                         test=len(test_idx), auc=round(metrics.auc_roc, 4),
-                         sharpe=round(metrics.sharpe_ratio, 4))
+            logger.info(
+                "wf_fold",
+                fold=fold_i,
+                train=len(train_idx),
+                test=len(test_idx),
+                auc=round(metrics.auc_roc, 4),
+                sharpe=round(metrics.sharpe_ratio, 4),
+            )
 
-        # Auxiliary: PurgedKFold (for reference only)
-        pkf_cv = PurgedKFold(
-            n_splits=self.config.validation.dev_cv_splits,
-            purge_days=self.config.validation.dev_cv_purge_days,
-        )
+        # Auxiliary: PurgedKFold (skip in fast mode)
         pkf_metrics: list[EvaluationMetrics] = []
-        for train_idx, test_idx in pkf_cv.split(X_np):
-            fold_model = LGBMPipeline()
-            fold_model.fit(
-                X[train_idx],
-                pl.Series(y_dir_np[train_idx]),
-                pl.Series(y_mag_np[train_idx]),
+        if not fast:
+            pkf_cv = PurgedKFold(
+                n_splits=self.config.validation.dev_cv_splits,
+                purge_days=self.config.validation.dev_cv_purge_days,
             )
-            pred_proba = np.array(fold_model.predict_proba(X[test_idx]))
-            pred_mag = np.array(fold_model.predict_magnitude(X[test_idx]))
-            m = compute_metrics(
-                y_dir_np[test_idx], pred_proba,
-                y_mag_np[test_idx], pred_mag,
-                commission_bps=commission_bps,
-                slippage_bps=slippage_bps,
-            )
-            pkf_metrics.append(m)
+            for train_idx, test_idx in pkf_cv.split(X_np):
+                fold_model = LGBMPipeline()
+                fold_model.fit(
+                    X[train_idx],
+                    pl.Series(y_dir_np[train_idx]),
+                    pl.Series(y_mag_np[train_idx]),
+                )
+                pred_proba = np.array(fold_model.predict_proba(X[test_idx]))
+                pred_mag = np.array(fold_model.predict_magnitude(X[test_idx]))
+                m = compute_metrics(
+                    y_dir_np[test_idx],
+                    pred_proba,
+                    y_mag_np[test_idx],
+                    pred_mag,
+                    commission_bps=commission_bps,
+                    slippage_bps=slippage_bps,
+                )
+                pkf_metrics.append(m)
 
         # Average CV metrics (Walk-Forward = primary)
         avg_metrics = {
@@ -171,14 +205,45 @@ class PipelineRunner:
             "wf_max_drawdown": np.mean([m.max_drawdown for m in wf_metrics]),
             "wf_win_rate": np.mean([m.win_rate for m in wf_metrics]),
             "wf_n_folds": len(wf_metrics),
-            "pkf_auc_roc": np.mean([m.auc_roc for m in pkf_metrics]),
-            "pkf_sharpe": np.mean([m.sharpe_ratio for m in pkf_metrics]),
+            "pkf_auc_roc": np.mean([m.auc_roc for m in pkf_metrics]) if pkf_metrics else 0.0,
+            "pkf_sharpe": np.mean([m.sharpe_ratio for m in pkf_metrics]) if pkf_metrics else 0.0,
         }
-        logger.info("cv_results", **{k: round(v, 4) if isinstance(v, float) else v
-                                      for k, v in avg_metrics.items()})
+        logger.info(
+            "cv_results",
+            **{k: round(v, 4) if isinstance(v, float) else v for k, v in avg_metrics.items()},
+        )
 
         # Save model
         version = self.model_store.save(model, metrics=avg_metrics)
+
+        # Register in SQLite
+        self.db.register_model(
+            version=version,
+            model_type="lgbm",
+            model_path=str(self.project_dir / self.config.data.storage_dir / "models" / version),
+            config=self.config.model_dump(),
+            metrics={
+                str(k): float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v
+                for k, v in avg_metrics.items()
+            },
+            feature_names=feature_cols,
+        )
+
+        # Log experiment
+        duration = time.monotonic() - t0
+        avg_metrics["n_tickers"] = len(self.universe)
+        avg_metrics["n_samples"] = X.height
+        self.db.log_experiment(
+            config=self.config.model_dump(),
+            metrics={
+                str(k): float(v) if isinstance(v, (int, float, np.integer, np.floating)) else v
+                for k, v in avg_metrics.items()
+            },
+            model_version=version,
+            duration_seconds=duration,
+        )
+        logger.info("experiment_logged", duration=f"{duration:.1f}s")
+
         return version
 
     def run_predict(self, model_version: str | None = None) -> list[PredictionResult]:
@@ -194,7 +259,9 @@ class PipelineRunner:
         for ticker in self.universe:
             try:
                 features = self.feature_engine.compute_features(
-                    ticker, self.market, as_of=today,
+                    ticker,
+                    self.market,
+                    as_of=today,
                     tiers=self.config.features.tiers,
                 )
                 if features.height == 0:
@@ -208,37 +275,39 @@ class PipelineRunner:
                 proba = model.predict_proba(X)[0]
                 magnitude = model.predict_magnitude(X)[0]
 
-                predictions.append(PredictionResult(
-                    ticker=ticker,
-                    prediction_date=today + timedelta(days=1),
-                    direction=1 if proba >= 0.5 else 0,
-                    direction_proba=proba,
-                    magnitude=magnitude,
-                    model_version=model.version,
-                    features_used=feature_cols,
-                ))
+                predictions.append(
+                    PredictionResult(
+                        ticker=ticker,
+                        prediction_date=today + timedelta(days=1),
+                        direction=1 if proba >= 0.5 else 0,
+                        direction_proba=proba,
+                        magnitude=magnitude,
+                        model_version=model.version,
+                        features_used=feature_cols,
+                    )
+                )
             except Exception as e:
                 logger.error("predict_failed", ticker=ticker, error=str(e))
 
         logger.info("predictions_generated", count=len(predictions))
         return predictions
 
-    def run_all(self) -> dict:
+    def run_all(self, fast: bool = False) -> dict:
         """Full pipeline: fetch → train → predict."""
-        logger.info("pipeline_start")
+        logger.info("pipeline_start", fast=fast)
         self.run_fetch()
-        version = self.run_train()
+        version = self.run_train(fast=fast)
         predictions = self.run_predict(version)
 
         # Export signals for Claude Code integration
         from qtp.integration.claude_bridge import ClaudeBridge
+
         bridge = ClaudeBridge()
         output_dir = self.project_dir / self.config.reporting.output_dir
         bridge.export_signals(predictions, self.market.value, output_dir)
         bridge.export_markdown_report(predictions, self.market.value, output_dir)
 
-        logger.info("pipeline_complete", model_version=version,
-                     predictions=len(predictions))
+        logger.info("pipeline_complete", model_version=version, predictions=len(predictions))
         return {
             "model_version": version,
             "predictions": predictions,

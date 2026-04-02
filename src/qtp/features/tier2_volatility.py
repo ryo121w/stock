@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import polars as pl
 
 from qtp.features.registry import FeatureRegistry, FeatureTier
@@ -12,24 +11,38 @@ reg = FeatureRegistry.instance()
 
 # --- Realized Volatility ---
 
-@reg.register("realized_vol_21d", FeatureTier.TIER2_VOLATILITY, lookback_days=25,
-              description="21-day realized volatility (annualized)")
+
+@reg.register(
+    "realized_vol_21d",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=25,
+    description="21-day realized volatility (annualized)",
+)
 def realized_vol_21d(df: pl.DataFrame) -> pl.Series:
     ret = df["close"].pct_change(1)
-    return (ret.rolling_std(21) * (252 ** 0.5)).alias("realized_vol_21d")
+    return (ret.rolling_std(21) * (252**0.5)).alias("realized_vol_21d")
 
 
-@reg.register("realized_vol_63d", FeatureTier.TIER2_VOLATILITY, lookback_days=68,
-              description="63-day realized volatility (annualized)")
+@reg.register(
+    "realized_vol_63d",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=68,
+    description="63-day realized volatility (annualized)",
+)
 def realized_vol_63d(df: pl.DataFrame) -> pl.Series:
     ret = df["close"].pct_change(1)
-    return (ret.rolling_std(63) * (252 ** 0.5)).alias("realized_vol_63d")
+    return (ret.rolling_std(63) * (252**0.5)).alias("realized_vol_63d")
 
 
 # --- ATR ---
 
-@reg.register("atr_14", FeatureTier.TIER2_VOLATILITY, lookback_days=18,
-              description="Average True Range (14-day)")
+
+@reg.register(
+    "atr_14",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=18,
+    description="Average True Range (14-day)",
+)
 def atr_14(df: pl.DataFrame) -> pl.Series:
     high = df["high"]
     low = df["low"]
@@ -42,8 +55,12 @@ def atr_14(df: pl.DataFrame) -> pl.Series:
     return tr.rolling_mean(14).alias("atr_14")
 
 
-@reg.register("natr_14", FeatureTier.TIER2_VOLATILITY, lookback_days=18,
-              description="Normalized ATR (ATR / Close)")
+@reg.register(
+    "natr_14",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=18,
+    description="Normalized ATR (ATR / Close)",
+)
 def natr_14(df: pl.DataFrame) -> pl.Series:
     high = df["high"]
     low = df["low"]
@@ -55,8 +72,13 @@ def natr_14(df: pl.DataFrame) -> pl.Series:
 
 # --- Bollinger Bands ---
 
-@reg.register("bbands_pct_b", FeatureTier.TIER2_VOLATILITY, lookback_days=25,
-              description="Bollinger Bands %B (position within bands)")
+
+@reg.register(
+    "bbands_pct_b",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=25,
+    description="Bollinger Bands %B (position within bands)",
+)
 def bbands_pct_b(df: pl.DataFrame) -> pl.Series:
     sma = df["close"].rolling_mean(20)
     std = df["close"].rolling_std(20)
@@ -66,8 +88,12 @@ def bbands_pct_b(df: pl.DataFrame) -> pl.Series:
     return pct_b.alias("bbands_pct_b")
 
 
-@reg.register("bbands_width", FeatureTier.TIER2_VOLATILITY, lookback_days=25,
-              description="Bollinger Bands width (normalized)")
+@reg.register(
+    "bbands_width",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=25,
+    description="Bollinger Bands width (normalized)",
+)
 def bbands_width(df: pl.DataFrame) -> pl.Series:
     sma = df["close"].rolling_mean(20)
     std = df["close"].rolling_std(20)
@@ -77,23 +103,37 @@ def bbands_width(df: pl.DataFrame) -> pl.Series:
 
 # --- Volume ---
 
-@reg.register("volume_ratio_20d", FeatureTier.TIER2_VOLATILITY, lookback_days=25,
-              description="Volume / SMA(volume, 20)")
+
+@reg.register(
+    "volume_ratio_20d",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=25,
+    description="Volume / SMA(volume, 20)",
+)
 def volume_ratio_20d(df: pl.DataFrame) -> pl.Series:
     sma_vol = df["volume"].rolling_mean(20)
     return (df["volume"] / sma_vol).alias("volume_ratio_20d")
 
 
-@reg.register("volume_change_5d", FeatureTier.TIER2_VOLATILITY, lookback_days=10,
-              description="5-day volume change rate")
+@reg.register(
+    "volume_change_5d",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=10,
+    description="5-day volume change rate",
+)
 def volume_change_5d(df: pl.DataFrame) -> pl.Series:
     return df["volume"].pct_change(5).alias("volume_change_5d")
 
 
 # --- Drawdown ---
 
-@reg.register("max_drawdown_63d", FeatureTier.TIER2_VOLATILITY, lookback_days=68,
-              description="Maximum drawdown over 63 days")
+
+@reg.register(
+    "max_drawdown_63d",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=68,
+    description="Maximum drawdown over 63 days",
+)
 def max_drawdown_63d(df: pl.DataFrame) -> pl.Series:
     close = df["close"]
     rolling_max = close.rolling_max(63)

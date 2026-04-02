@@ -14,6 +14,7 @@ class FeatureTier(IntEnum):
     TIER2_VOLATILITY = 2
     TIER3_FUNDAMENTAL = 3
     TIER4_MACRO = 4
+    TIER5_ALTERNATIVE = 5
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ class FeatureRegistry:
         dependencies: tuple[str, ...] = (),
     ) -> Callable:
         """Decorator to register a feature computation function."""
+
         def decorator(fn: Callable[[pl.DataFrame], pl.Series]) -> Callable:
             self._features[name] = FeatureDefinition(
                 name=name,
@@ -62,6 +64,7 @@ class FeatureRegistry:
                 dependencies=dependencies,
             )
             return fn
+
         return decorator
 
     def get(self, name: str) -> FeatureDefinition:

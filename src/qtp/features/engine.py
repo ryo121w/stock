@@ -53,23 +53,45 @@ class FeatureEngine:
             logger.warning("no_data_for_features", ticker=ticker, as_of=str(as_of))
             return pl.DataFrame()
 
-        features = [f for f in self.registry.by_tiers(tiers)] if tiers else self.registry.all_features()
+        features = (
+            [f for f in self.registry.by_tiers(tiers)] if tiers else self.registry.all_features()
+        )
+
+        # Add ticker column so Tier5 features can identify which ticker's data to load
+        ohlcv_with_ticker = ohlcv.with_columns(pl.lit(ticker).alias("ticker"))
 
         result = ohlcv.select("date")
         for feat_def in features:
             try:
-                series = feat_def.compute_fn(ohlcv)
+                series = feat_def.compute_fn(ohlcv_with_ticker)
                 result = result.with_columns(series)
             except Exception as e:
-                logger.error("feature_computation_failed",
-                             feature=feat_def.name, ticker=ticker, error=str(e))
+                logger.error(
+                    "feature_computation_failed", feature=feat_def.name, ticker=ticker, error=str(e)
+                )
                 result = result.with_columns(pl.lit(None).alias(feat_def.name))
 
-        # Drop warmup rows (nulls from lookback)
-        result = result.drop_nulls()
+        # Drop warmup rows (nulls from lookback in Tier1-4)
+        # Tier5 (alternative data) may have all-null columns when cache is unavailable;
+        # only drop rows where core features (non-Tier5) have nulls
+        from qtp.features.registry import FeatureTier
 
-        logger.info("computed_features", ticker=ticker, rows=result.height,
-                     n_features=len(result.columns) - 1)
+        core_feature_names = [f.name for f in features if f.tier != FeatureTier.TIER5_ALTERNATIVE]
+        core_cols = [c for c in core_feature_names if c in result.columns]
+        if core_cols:
+            result = result.filter(pl.all_horizontal([pl.col(c).is_not_null() for c in core_cols]))
+        # Fill remaining Tier5 nulls with 0 (neutral signal = no data)
+        tier5_names = [f.name for f in features if f.tier == FeatureTier.TIER5_ALTERNATIVE]
+        for col in tier5_names:
+            if col in result.columns:
+                result = result.with_columns(pl.col(col).fill_null(0.0))
+
+        logger.info(
+            "computed_features",
+            ticker=ticker,
+            rows=result.height,
+            n_features=len(result.columns) - 1,
+        )
         return result
 
     def compute_label(
@@ -78,25 +100,49 @@ class FeatureEngine:
         market: Market,
         as_of: date,
         horizon: int = 1,
+        direction_threshold: float = 0.0,
     ) -> pl.DataFrame:
         """Compute target labels. SEPARATE from features to prevent leakage.
 
-        Returns: [date, label_direction (1/0), label_magnitude (float)]
-        - label_direction: 1 if close[T+horizon] > close[T], else 0
+        Returns: [date, label_direction (1/0/-1 or NaN), label_magnitude (float)]
         - label_magnitude: (close[T+horizon] - close[T]) / close[T]
+        - label_direction: 1 if magnitude > threshold, 0 if magnitude < -threshold,
+                           NaN if within neutral zone (filtered out)
+
+        Parameters
+        ----------
+        direction_threshold : float
+            Minimum absolute return to count as directional signal.
+            0.0 = any positive return = "up" (original behavior).
+            0.02 = only ±2% moves are labeled, rest dropped as neutral.
 
         NOTE: shift(-horizon) is used here and ONLY here in the entire codebase.
         """
         ohlcv = self.storage.load_ohlcv(ticker, market, as_of=as_of)
 
-        labels = ohlcv.with_columns([
-            (pl.col("close").shift(-horizon) > pl.col("close"))
-            .cast(pl.Int8).alias("label_direction"),
-            ((pl.col("close").shift(-horizon) - pl.col("close")) / pl.col("close"))
-            .alias("label_magnitude"),
-        ]).select(["date", "label_direction", "label_magnitude"])
+        magnitude = (pl.col("close").shift(-horizon) - pl.col("close")) / pl.col("close")
 
-        # Drop rows without labels (last `horizon` rows)
+        labels = (
+            ohlcv.with_columns(
+                [
+                    magnitude.alias("label_magnitude"),
+                ]
+            )
+            .with_columns(
+                [
+                    pl.when(pl.col("label_magnitude") > direction_threshold)
+                    .then(pl.lit(1))
+                    .when(pl.col("label_magnitude") < -direction_threshold)
+                    .then(pl.lit(0))
+                    .otherwise(pl.lit(None))
+                    .cast(pl.Int8)
+                    .alias("label_direction"),
+                ]
+            )
+            .select(["date", "label_direction", "label_magnitude"])
+        )
+
+        # Drop rows without labels (last `horizon` rows + neutral zone)
         labels = labels.filter(pl.col("label_direction").is_not_null())
         return labels
 
@@ -107,11 +153,15 @@ class FeatureEngine:
         as_of: date,
         tiers: list[int] | None = None,
         horizon: int = 1,
+        direction_threshold: float = 0.0,
     ) -> pl.DataFrame:
         """Join features + labels on date. Computed independently to prevent leakage."""
-        features = self.compute_features(ticker, market, as_of=as_of, tiers=tiers,
-                                          use_all_data=True)
-        labels = self.compute_label(ticker, market, as_of=as_of, horizon=horizon)
+        features = self.compute_features(
+            ticker, market, as_of=as_of, tiers=tiers, use_all_data=True
+        )
+        labels = self.compute_label(
+            ticker, market, as_of=as_of, horizon=horizon, direction_threshold=direction_threshold
+        )
 
         if features.height == 0:
             return pl.DataFrame()
@@ -127,12 +177,13 @@ class FeatureEngine:
         as_of: date,
         tiers: list[int] | None = None,
         horizon: int = 1,
+        direction_threshold: float = 0.0,
     ) -> pl.DataFrame:
         """Build combined dataset across multiple tickers."""
         frames: list[pl.DataFrame] = []
         for ticker in tickers:
             try:
-                ds = self.build_dataset(ticker, market, as_of, tiers, horizon)
+                ds = self.build_dataset(ticker, market, as_of, tiers, horizon, direction_threshold)
                 if ds.height > 0:
                     ds = ds.with_columns(pl.lit(ticker).alias("ticker"))
                     frames.append(ds)

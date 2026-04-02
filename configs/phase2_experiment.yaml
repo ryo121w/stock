@@ -1,0 +1,8 @@
+# Phase 2 experimental config: improved labels + all tiers
+labels:
+  horizon: 5                  # 5-day forward return (1 week)
+  direction_threshold: 0.02   # Only ±2% moves are labeled (neutral zone dropped)
+
+features:
+  tiers: [1, 2, 3, 4, 5]     # Include Tier5 alternative features
+  max_features: 50

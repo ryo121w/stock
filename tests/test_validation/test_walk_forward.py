@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from qtp.validation.walk_forward import ExpandingWindowCV
 
@@ -28,8 +27,9 @@ class TestExpandingWindowCV:
         X = np.zeros((200, 3))
 
         for train_idx, test_idx in cv.split(X):
-            assert train_idx.max() < test_idx.min(), \
+            assert train_idx.max() < test_idx.min(), (
                 f"Train max {train_idx.max()} >= test min {test_idx.min()}"
+            )
 
     def test_purge_gap_respected(self):
         """Gap between train end and test start >= purge_gap."""
@@ -48,8 +48,9 @@ class TestExpandingWindowCV:
 
         train_sizes = [len(tr) for tr, _ in cv.split(X)]
         for i in range(1, len(train_sizes)):
-            assert train_sizes[i] > train_sizes[i - 1], \
-                f"Fold {i} train ({train_sizes[i]}) not larger than fold {i-1} ({train_sizes[i-1]})"
+            assert train_sizes[i] > train_sizes[i - 1], (
+                f"Fold {i} train ({train_sizes[i]}) not larger than fold {i - 1} ({train_sizes[i - 1]})"
+            )
 
     def test_fixed_test_window(self):
         """Test window size must be constant across folds."""

@@ -76,8 +76,10 @@ def compute_metrics(
     f1 = f1_score(y_true_direction, y_pred_direction, zero_division=0)
 
     try:
-        auc = roc_auc_score(y_true_direction, y_pred_proba)
-    except ValueError:
+        auc = float(roc_auc_score(y_true_direction, y_pred_proba))
+        if not np.isfinite(auc):
+            auc = 0.5
+    except (ValueError, TypeError):
         auc = 0.5
 
     try:

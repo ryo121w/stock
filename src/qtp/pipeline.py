@@ -198,15 +198,20 @@ class PipelineRunner:
                 pkf_metrics.append(m)
 
         # Average CV metrics (Walk-Forward = primary)
+        # Use nanmean to handle any residual nan values gracefully
         avg_metrics = {
-            "wf_accuracy": np.mean([m.accuracy for m in wf_metrics]),
-            "wf_auc_roc": np.mean([m.auc_roc for m in wf_metrics]),
-            "wf_sharpe": np.mean([m.sharpe_ratio for m in wf_metrics]),
-            "wf_max_drawdown": np.mean([m.max_drawdown for m in wf_metrics]),
-            "wf_win_rate": np.mean([m.win_rate for m in wf_metrics]),
+            "wf_accuracy": float(np.nanmean([m.accuracy for m in wf_metrics])),
+            "wf_auc_roc": float(np.nanmean([m.auc_roc for m in wf_metrics])),
+            "wf_sharpe": float(np.nanmean([m.sharpe_ratio for m in wf_metrics])),
+            "wf_max_drawdown": float(np.nanmean([m.max_drawdown for m in wf_metrics])),
+            "wf_win_rate": float(np.nanmean([m.win_rate for m in wf_metrics])),
             "wf_n_folds": len(wf_metrics),
-            "pkf_auc_roc": np.mean([m.auc_roc for m in pkf_metrics]) if pkf_metrics else 0.0,
-            "pkf_sharpe": np.mean([m.sharpe_ratio for m in pkf_metrics]) if pkf_metrics else 0.0,
+            "pkf_auc_roc": float(np.nanmean([m.auc_roc for m in pkf_metrics]))
+            if pkf_metrics
+            else 0.0,
+            "pkf_sharpe": float(np.nanmean([m.sharpe_ratio for m in pkf_metrics]))
+            if pkf_metrics
+            else 0.0,
         }
         logger.info(
             "cv_results",

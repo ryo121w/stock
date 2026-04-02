@@ -42,7 +42,10 @@ logger = structlog.get_logger()
 
 def load_config():
     config_path = project_root / "configs" / "default.yaml"
+    p3_path = project_root / "configs" / "phase3_best.yaml"
     p2_path = project_root / "configs" / "phase2_experiment.yaml"
+    if p3_path.exists():
+        return PipelineConfig.from_yamls(config_path, p3_path)
     if p2_path.exists():
         return PipelineConfig.from_yamls(config_path, p2_path)
     return PipelineConfig.from_yaml(config_path)
@@ -96,11 +99,14 @@ def run_backtest(config, dataset):
         "conf_65_mag_05": {"conf": 0.65, "mag": 0.005},
     }
 
-    # Collect all OOS predictions
+    # Collect all OOS predictions (keep ticker information)
     all_oos_dates = []
+    all_oos_tickers = []
     all_oos_returns = []
     all_oos_proba = []
     all_oos_pred_dir = []
+
+    tickers = dataset["ticker"].to_list()
 
     print(f"Running walk-forward backtest ({cv.get_n_splits(X_np)} folds)...")
     for fold_i, (train_idx, test_idx) in enumerate(cv.split(X_np)):
@@ -115,8 +121,10 @@ def run_backtest(config, dataset):
         pred_dir = (pred_proba >= 0.5).astype(int)
         actual_mag = y_mag[test_idx]
         fold_dates = [dates[i] for i in test_idx]
+        fold_tickers = [tickers[i] for i in test_idx]
 
         all_oos_dates.extend(fold_dates)
+        all_oos_tickers.extend(fold_tickers)
         all_oos_returns.extend(actual_mag.tolist())
         all_oos_proba.extend(pred_proba.tolist())
         all_oos_pred_dir.extend(pred_dir.tolist())
@@ -124,72 +132,103 @@ def run_backtest(config, dataset):
         if fold_i % 10 == 0:
             print(f"  Fold {fold_i}: train={len(train_idx)}, test={len(test_idx)}")
 
-    all_oos_returns = np.array(all_oos_returns)
-    all_oos_proba = np.array(all_oos_proba)
-    all_oos_pred_dir = np.array(all_oos_pred_dir)
+    # Build DataFrame with date + ticker (no deduplication by date alone)
+    oos_df = pl.DataFrame(
+        {
+            "date": all_oos_dates,
+            "ticker": all_oos_tickers,
+            "return": np.array(all_oos_returns),
+            "proba": np.array(all_oos_proba),
+            "pred_dir": np.array(all_oos_pred_dir),
+        }
+    )
 
-    # Deduplicate OOS samples: when multiple folds cover the same date+ticker,
+    # Deduplicate: when multiple folds cover the same date+ticker,
     # keep only the prediction from the LATEST model (largest training set)
-    oos_df = (
-        pl.DataFrame(
-            {
-                "date": all_oos_dates,
-                "return": all_oos_returns,
-                "proba": all_oos_proba,
-                "pred_dir": all_oos_pred_dir,
-            }
-        )
-        .sort("date")
-        .group_by("date")
-        .last()
-    )  # Last = latest model's prediction
-    oos_df = oos_df.sort("date")
+    oos_df = oos_df.sort("date").group_by(["date", "ticker"]).last().sort("date", "ticker")
 
-    all_oos_returns = oos_df["return"].to_numpy()
-    all_oos_proba = oos_df["proba"].to_numpy()
-    all_oos_pred_dir = oos_df["pred_dir"].to_numpy()
-    all_oos_dates = oos_df["date"].to_list()
-
-    # Convert period returns to simple per-period (no daily splitting)
-    # Each row represents one non-overlapping prediction period
     horizon = config.labels.horizon
+    unique_dates = sorted(oos_df["date"].unique().to_list())
+    unique_tickers = sorted(oos_df["ticker"].unique().to_list())
 
-    print(f"\nDeduplicated OOS: {len(all_oos_returns)} periods")
-    print(f"OOS date range: {min(all_oos_dates)} → {max(all_oos_dates)}")
-    print(f"Mean period return: {all_oos_returns.mean():.4%} ({horizon}-day)")
+    print(
+        f"\nDeduplicated OOS: {oos_df.height} rows ({len(unique_tickers)} tickers x {len(unique_dates)} dates)"
+    )
+    print(f"OOS date range: {unique_dates[0]} → {unique_dates[-1]}")
+    print(f"Mean period return: {oos_df['return'].mean():.4%} ({horizon}-day)")
 
-    # Compute strategy returns for each strategy
+    # Non-overlapping periods: subsample every horizon-th date so that
+    # 10-day returns don't overlap when compounded.
+    non_overlap_dates = unique_dates[::horizon]
+    oos_nolap = oos_df.filter(pl.col("date").is_in(non_overlap_dates))
+    n_periods = len(non_overlap_dates)
+    print(f"Non-overlapping periods: {n_periods} (every {horizon}th date)")
+
+    # Compute strategy returns as equal-weight portfolio
     results = {}
     for name, params in strategies.items():
         conf_thresh = params["conf"]
 
-        # Signal: 1 if long, 0 if flat
-        signal = np.where(
-            (all_oos_proba >= conf_thresh) & (all_oos_pred_dir == 1),
-            1.0,
-            0.0,
+        # Add signal column: 1 if long, 0 if flat
+        strat_df = oos_nolap.with_columns(
+            pl.when((pl.col("proba") >= conf_thresh) & (pl.col("pred_dir") == 1))
+            .then(1.0)
+            .otherwise(0.0)
+            .alias("signal")
         )
 
-        # Period returns when signal is on
-        gross_returns = all_oos_returns * signal
+        # Compute per-ticker costs: charge cost when signal changes
+        strat_df = strat_df.sort("ticker", "date")
+        strat_df = strat_df.with_columns(
+            pl.col("signal")
+            .diff()
+            .abs()
+            .fill_null(pl.col("signal"))  # first row: cost if entering
+            .over("ticker")
+            .alias("trade_flag")
+        )
 
-        # Transaction costs: pay cost on each signal change
-        trades = np.abs(np.diff(signal, prepend=0))
-        net_returns = gross_returns - trades * cost_per_trade
+        # Per-row net return = signal * return - trade_flag * cost
+        strat_df = strat_df.with_columns(
+            (pl.col("signal") * pl.col("return") - pl.col("trade_flag") * cost_per_trade).alias(
+                "net_return"
+            )
+        )
 
-        # Equity curve (period-by-period compounding)
-        equity = (1 + net_returns).cumprod()
+        # Portfolio return per date = mean of net_return across tickers
+        portfolio_daily = (
+            strat_df.group_by("date")
+            .agg(
+                pl.col("net_return").mean().alias("port_return"),
+                pl.col("signal").mean().alias("avg_signal"),
+                pl.col("trade_flag").sum().alias("trades_today"),
+            )
+            .sort("date")
+        )
 
-        # Buy & Hold benchmark
-        bh_equity = (1 + all_oos_returns).cumprod()
+        port_returns = portfolio_daily["port_return"].to_numpy()
+        avg_signals = portfolio_daily["avg_signal"].to_numpy()
+
+        # Equity curve (each period is horizon-day, non-overlapping)
+        equity = (1 + port_returns).cumprod()
+
+        # Buy & Hold benchmark = equal-weight portfolio of all tickers
+        bh_daily = (
+            oos_nolap.group_by("date").agg(pl.col("return").mean().alias("bh_return")).sort("date")
+        )
+        bh_returns = bh_daily["bh_return"].to_numpy()
+        bh_equity = (1 + bh_returns).cumprod()
 
         # Metrics
-        n_trades = int(trades.sum() / 2)  # entry + exit = 2 signals per trade
-        n_days_in_market = int(signal.sum())
-        pct_in_market = n_days_in_market / len(signal) * 100
+        total_trades_flag = strat_df["trade_flag"].sum()
+        n_trades = int(total_trades_flag / 2)  # entry + exit = 2 per round-trip
+        pct_in_market = float(avg_signals.mean()) * 100
 
-        if net_returns[signal == 1].std() > 0:
-            sharpe = (net_returns[signal == 1].mean() / net_returns[signal == 1].std()) * (252**0.5)
+        active_returns = port_returns[avg_signals > 0]
+        if len(active_returns) > 0 and active_returns.std() > 0:
+            # Annualize: periods_per_year = 252 / horizon
+            periods_per_year = 252 / horizon
+            sharpe = (active_returns.mean() / active_returns.std()) * (periods_per_year**0.5)
         else:
             sharpe = 0.0
 
@@ -197,14 +236,13 @@ def run_backtest(config, dataset):
         drawdown = (equity - running_max) / running_max
         max_dd = drawdown.min()
 
-        wins = net_returns[signal == 1]
-        win_rate = (wins > 0).mean() if len(wins) > 0 else 0
+        win_rate = (active_returns > 0).mean() if len(active_returns) > 0 else 0
 
         total_return = equity[-1] - 1
         bh_return = bh_equity[-1] - 1
         excess_return = total_return - bh_return
 
-        total_cost = (trades * cost_per_trade).sum()
+        total_cost = float(strat_df["trade_flag"].sum()) * cost_per_trade
 
         results[name] = {
             "total_return": total_return,
@@ -219,7 +257,7 @@ def run_backtest(config, dataset):
             "equity_final": equity[-1],
         }
 
-    return results, all_oos_dates, all_oos_returns
+    return results, unique_dates, oos_df["return"].to_numpy()
 
 
 def format_report(results, initial_capital):

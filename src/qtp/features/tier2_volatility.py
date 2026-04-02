@@ -125,6 +125,62 @@ def volume_change_5d(df: pl.DataFrame) -> pl.Series:
     return df["volume"].pct_change(5).alias("volume_change_5d")
 
 
+# --- Volume Profile ---
+
+
+@reg.register(
+    "volume_up_down_ratio",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=22,
+    description="20-day ratio of volume on up-days vs down-days",
+)
+def volume_up_down_ratio(df: pl.DataFrame) -> pl.Series:
+    up_mask = df["close"] > df["close"].shift(1)
+    up_vol = (df["volume"] * up_mask.cast(pl.Float64)).rolling_sum(20)
+    down_vol = (df["volume"] * (~up_mask).cast(pl.Float64)).rolling_sum(20)
+    return (up_vol / down_vol).fill_nan(0.0).alias("volume_up_down_ratio")
+
+
+@reg.register(
+    "volume_breakout",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=22,
+    description="Current volume / 20-day average volume",
+)
+def volume_breakout(df: pl.DataFrame) -> pl.Series:
+    avg_vol = df["volume"].rolling_mean(20)
+    return (df["volume"] / avg_vol).fill_nan(0.0).alias("volume_breakout")
+
+
+@reg.register(
+    "ad_line_slope",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=22,
+    description="Accumulation/Distribution line 20-day slope (pct_change)",
+)
+def ad_line_slope(df: pl.DataFrame) -> pl.Series:
+    hl_range = df["high"] - df["low"]
+    clv = (
+        pl.when(hl_range == 0)
+        .then(0.0)
+        .otherwise(((df["close"] - df["low"]) - (df["high"] - df["close"])) / hl_range)
+    )
+    ad = (clv * df["volume"]).cum_sum()
+    return ad.pct_change(20).fill_nan(0.0).fill_null(0.0).alias("ad_line_slope")
+
+
+@reg.register(
+    "obv_slope_20d",
+    FeatureTier.TIER2_VOLATILITY,
+    lookback_days=25,
+    description="On-Balance Volume 20-day rate of change",
+)
+def obv_slope_20d(df: pl.DataFrame) -> pl.Series:
+    direction = pl.when(df["close"] > df["close"].shift(1)).then(1).otherwise(-1)
+    obv = (direction * df["volume"]).cum_sum()
+    return obv.pct_change(20).fill_nan(0.0).fill_null(0.0).alias("obv_slope_20d")
+
+
 # --- Drawdown ---
 
 

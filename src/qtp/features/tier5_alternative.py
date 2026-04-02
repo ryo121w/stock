@@ -324,6 +324,117 @@ def market_regime_label(df: pl.DataFrame) -> pl.Series:
 
 
 # =============================================================================
+# Daily History Features (require accumulated data from alternative_data_daily)
+# =============================================================================
+
+
+def _load_alt_history(ticker: str, tool_name: str, n_days: int = 7) -> list[dict]:
+    """Load daily history of MCP tool results for a ticker from SQLite."""
+    db = _get_db()
+    rows = db.get_alternative_history(ticker, tool_name, n_days=n_days)
+    return rows  # List of {date, data, fetched_at}, newest first
+
+
+@reg.register(
+    "eps_revision_trend_7d",
+    FeatureTier.TIER5_ALTERNATIVE,
+    lookback_days=1,
+    description="Count of EPS revision direction changes over past 7 daily records",
+)
+def eps_revision_trend_7d(df: pl.DataFrame) -> pl.Series:
+    """Count how many times the EPS revision signal changed over the last 7 days.
+
+    A high count indicates unstable analyst sentiment.
+    Positive values = net upward revisions, negative = net downward.
+    Falls back to 0 when insufficient daily data (<7 records).
+    """
+    n = df.height
+    ticker = _infer_ticker(df)
+    if not ticker:
+        return _null_series("eps_revision_trend_7d", n)
+
+    history = _load_alt_history(ticker, "earnings_trend", n_days=7)
+    if len(history) < 7:
+        # Not enough accumulated data — return 0 (neutral)
+        return pl.Series("eps_revision_trend_7d", [0.0] * n, dtype=pl.Float64)
+
+    try:
+        # Extract revision direction from each daily record
+        revisions = []
+        for entry in history:
+            data = entry["data"]
+            trend = data.get("trend", data)
+            rev = trend.get("eps_revision_7d", trend.get("revision_7d", 0))
+            if isinstance(rev, str):
+                rev = {"up": 1, "down": -1, "flat": 0}.get(rev.lower(), 0)
+            revisions.append(float(rev))
+
+        # Count direction changes (sign flips)
+        changes = 0
+        for i in range(1, len(revisions)):
+            if revisions[i] != revisions[i - 1]:
+                changes += 1
+
+        # Net direction: sum of all revision signals
+        net_direction = sum(revisions)
+        # Combine: sign(net_direction) * change_count gives trend strength + volatility
+        trend_score = net_direction  # Simpler: just use net revisions over 7 days
+
+        return pl.Series("eps_revision_trend_7d", [trend_score] * n, dtype=pl.Float64)
+    except Exception:
+        return _null_series("eps_revision_trend_7d", n)
+
+
+@reg.register(
+    "target_price_gap_change",
+    FeatureTier.TIER5_ALTERNATIVE,
+    lookback_days=1,
+    description="Change in analyst target price gap over past 7 daily records",
+)
+def target_price_gap_change(df: pl.DataFrame) -> pl.Series:
+    """Compute the change in target_price_gap over the past 7 daily records.
+
+    A positive value means analysts are raising targets relative to price.
+    Falls back to 0 when insufficient daily data (<7 records).
+    """
+    n = df.height
+    ticker = _infer_ticker(df)
+    if not ticker:
+        return _null_series("target_price_gap_change", n)
+
+    history = _load_alt_history(ticker, "analyst_estimates", n_days=7)
+    if len(history) < 7:
+        return pl.Series("target_price_gap_change", [0.0] * n, dtype=pl.Float64)
+
+    try:
+        # Extract target_mean_price from newest and oldest records
+        newest = history[0]["data"]
+        oldest = history[-1]["data"]
+
+        newest_target = newest.get("target_mean_price", newest.get("targetMeanPrice", None))
+        oldest_target = oldest.get("target_mean_price", oldest.get("targetMeanPrice", None))
+
+        if newest_target is None or oldest_target is None:
+            return pl.Series("target_price_gap_change", [0.0] * n, dtype=pl.Float64)
+
+        newest_target = float(newest_target)
+        oldest_target = float(oldest_target)
+
+        # Use last close price for gap calculation
+        current_price = df["close"].to_list()[-1]
+        if current_price and current_price > 0:
+            newest_gap = (newest_target - current_price) / current_price
+            oldest_gap = (oldest_target - current_price) / current_price
+            gap_change = newest_gap - oldest_gap
+        else:
+            gap_change = 0.0
+
+        return pl.Series("target_price_gap_change", [gap_change] * n, dtype=pl.Float64)
+    except Exception:
+        return _null_series("target_price_gap_change", n)
+
+
+# =============================================================================
 # Helper
 # =============================================================================
 

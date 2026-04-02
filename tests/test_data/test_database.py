@@ -53,6 +53,87 @@ class TestAlternativeData:
         assert items[0]["tool"] == "tool_a"
 
 
+class TestAlternativeDataDaily:
+    def test_upsert_and_get_history(self, db):
+        db.upsert_alternative_daily("AAPL", "earnings_trend", {"rev": "up"}, "2026-04-01")
+        db.upsert_alternative_daily("AAPL", "earnings_trend", {"rev": "down"}, "2026-04-02")
+        db.upsert_alternative_daily("AAPL", "earnings_trend", {"rev": "flat"}, "2026-04-03")
+
+        history = db.get_alternative_history("AAPL", "earnings_trend", n_days=10)
+        assert len(history) == 3
+        # Newest first
+        assert history[0]["date"] == "2026-04-03"
+        assert history[0]["data"] == {"rev": "flat"}
+        assert history[2]["date"] == "2026-04-01"
+
+    def test_upsert_daily_overwrites_same_date(self, db):
+        db.upsert_alternative_daily("AAPL", "tool1", {"v": 1}, "2026-04-01")
+        db.upsert_alternative_daily("AAPL", "tool1", {"v": 2}, "2026-04-01")
+        history = db.get_alternative_history("AAPL", "tool1", n_days=10)
+        assert len(history) == 1
+        assert history[0]["data"] == {"v": 2}
+
+    def test_upsert_daily_also_updates_legacy(self, db):
+        db.upsert_alternative_daily("AAPL", "tool1", {"daily": True}, "2026-04-01")
+        legacy = db.get_alternative("AAPL", "tool1")
+        assert legacy == {"daily": True}
+
+    def test_get_as_of_exact_date(self, db):
+        db.upsert_alternative_daily("AAPL", "tool1", {"d": 1}, "2026-04-01")
+        db.upsert_alternative_daily("AAPL", "tool1", {"d": 2}, "2026-04-03")
+
+        result = db.get_alternative_as_of("AAPL", "tool1", "2026-04-03")
+        assert result is not None
+        assert result["data"] == {"d": 2}
+
+    def test_get_as_of_falls_back_to_earlier(self, db):
+        db.upsert_alternative_daily("AAPL", "tool1", {"d": 1}, "2026-04-01")
+        db.upsert_alternative_daily("AAPL", "tool1", {"d": 2}, "2026-04-03")
+
+        # Ask for 04-02 — should get 04-01 data
+        result = db.get_alternative_as_of("AAPL", "tool1", "2026-04-02")
+        assert result is not None
+        assert result["data"] == {"d": 1}
+        assert result["date"] == "2026-04-01"
+
+    def test_get_as_of_no_data(self, db):
+        result = db.get_alternative_as_of("AAPL", "nonexistent", "2026-04-01")
+        assert result is None
+
+    def test_get_history_limited(self, db):
+        for i in range(10):
+            db.upsert_alternative_daily("AAPL", "tool1", {"i": i}, f"2026-04-{i + 1:02d}")
+        history = db.get_alternative_history("AAPL", "tool1", n_days=3)
+        assert len(history) == 3
+        assert history[0]["date"] == "2026-04-10"
+
+    def test_default_date_is_today(self, db):
+        from datetime import datetime
+
+        db.upsert_alternative_daily("AAPL", "tool1", {"today": True})
+        history = db.get_alternative_history("AAPL", "tool1", n_days=1)
+        assert len(history) == 1
+        assert history[0]["date"] == datetime.now().strftime("%Y-%m-%d")
+
+    def test_migration_from_legacy(self, tmp_path):
+        """Test that legacy data is migrated to daily table on first init."""
+        db1 = QTPDatabase(tmp_path / "migrate.db")
+        # Insert legacy data only
+        db1.upsert_alternative("AAPL", "tool1", {"legacy": True})
+        # Now manually clear daily table to simulate old schema state
+        import sqlite3
+
+        conn = sqlite3.connect(str(tmp_path / "migrate.db"))
+        conn.execute("DELETE FROM alternative_data_daily")
+        conn.commit()
+        conn.close()
+        # Re-init should trigger migration
+        db2 = QTPDatabase(tmp_path / "migrate.db")
+        history = db2.get_alternative_history("AAPL", "tool1", n_days=10)
+        assert len(history) == 1
+        assert history[0]["data"] == {"legacy": True}
+
+
 class TestModelRegistry:
     def test_register_and_get(self, db):
         db.register_model(

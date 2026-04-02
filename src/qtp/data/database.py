@@ -21,10 +21,11 @@ import structlog
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 -- Alternative data from MCP tools (earnings_trend, analyst_actions, etc.)
+-- Legacy table: single snapshot per ticker/tool (kept for backward compatibility)
 CREATE TABLE IF NOT EXISTS alternative_data (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL,
@@ -36,6 +37,20 @@ CREATE TABLE IF NOT EXISTS alternative_data (
 );
 CREATE INDEX IF NOT EXISTS idx_alt_ticker ON alternative_data(ticker);
 CREATE INDEX IF NOT EXISTS idx_alt_freshness ON alternative_data(fetched_at);
+
+-- Daily alternative data accumulation (new: supports time-series analysis)
+CREATE TABLE IF NOT EXISTS alternative_data_daily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    date TEXT NOT NULL,
+    data JSON NOT NULL,
+    fetched_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(ticker, tool, date)
+);
+CREATE INDEX IF NOT EXISTS idx_alt_daily_ticker ON alternative_data_daily(ticker);
+CREATE INDEX IF NOT EXISTS idx_alt_daily_date ON alternative_data_daily(date);
+CREATE INDEX IF NOT EXISTS idx_alt_daily_lookup ON alternative_data_daily(ticker, tool, date);
 
 -- Model registry
 CREATE TABLE IF NOT EXISTS model_registry (
@@ -139,9 +154,27 @@ class QTPDatabase:
             conn.close()
 
     def _init_schema(self):
-        """Initialize database schema."""
+        """Initialize database schema with migration support."""
         with self._conn() as conn:
             conn.executescript(SCHEMA_SQL)
+
+            # Migration: backfill alternative_data_daily from legacy table
+            # if daily table is empty but legacy table has data
+            daily_count = conn.execute("SELECT COUNT(*) FROM alternative_data_daily").fetchone()[0]
+            if daily_count == 0:
+                legacy_count = conn.execute("SELECT COUNT(*) FROM alternative_data").fetchone()[0]
+                if legacy_count > 0:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO alternative_data_daily
+                           (ticker, tool, date, data, fetched_at)
+                           SELECT ticker, tool, date(fetched_at), data, fetched_at
+                           FROM alternative_data"""
+                    )
+                    logger.info(
+                        "migrated_legacy_to_daily",
+                        rows=legacy_count,
+                    )
+
             conn.execute(
                 "INSERT OR REPLACE INTO schema_info (key, value) VALUES (?, ?)",
                 ("version", str(SCHEMA_VERSION)),
@@ -237,6 +270,98 @@ class QTPDatabase:
                    GROUP BY ticker ORDER BY ticker""",
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # =========================================================================
+    # Alternative Data — Daily Accumulation
+    # =========================================================================
+
+    def upsert_alternative_daily(
+        self,
+        ticker: str,
+        tool: str,
+        data: dict,
+        date: str | None = None,
+    ) -> None:
+        """Save alternative data with a specific date for daily accumulation.
+
+        Args:
+            ticker: Ticker symbol (or '_market' for market-level data).
+            tool: Tool name (e.g. 'earnings_trend').
+            data: Tool response data as dict.
+            date: ISO date string (YYYY-MM-DD). Defaults to today.
+        """
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now()
+
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO alternative_data_daily (ticker, tool, date, data, fetched_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(ticker, tool, date) DO UPDATE SET
+                     data=excluded.data, fetched_at=excluded.fetched_at""",
+                (
+                    ticker,
+                    tool,
+                    date,
+                    json.dumps(data, default=str),
+                    now.isoformat(),
+                ),
+            )
+
+        # Also update legacy snapshot table for backward compatibility
+        self.upsert_alternative(ticker, tool, data)
+
+    def get_alternative_history(
+        self,
+        ticker: str,
+        tool: str,
+        n_days: int = 30,
+    ) -> list[dict]:
+        """Get last N days of daily alternative data, ordered by date descending.
+
+        Returns list of dicts with keys: date, data, fetched_at.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT date, data, fetched_at
+                   FROM alternative_data_daily
+                   WHERE ticker=? AND tool=?
+                   ORDER BY date DESC
+                   LIMIT ?""",
+                (ticker, tool, n_days),
+            ).fetchall()
+        result = []
+        for r in rows:
+            entry = dict(r)
+            entry["data"] = json.loads(entry["data"])
+            result.append(entry)
+        return result
+
+    def get_alternative_as_of(
+        self,
+        ticker: str,
+        tool: str,
+        as_of_date: str,
+    ) -> dict | None:
+        """Get alternative data valid on a specific date.
+
+        Returns the most recent record on or before as_of_date.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT data, date, fetched_at
+                   FROM alternative_data_daily
+                   WHERE ticker=? AND tool=? AND date <= ?
+                   ORDER BY date DESC
+                   LIMIT 1""",
+                (ticker, tool, as_of_date),
+            ).fetchone()
+        if row:
+            result = dict(row)
+            result["data"] = json.loads(result["data"])
+            return result
+        return None
 
     # =========================================================================
     # Model Registry

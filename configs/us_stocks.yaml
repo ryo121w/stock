@@ -1,0 +1,36 @@
+universe:
+  market: "us"
+  tickers:
+    # Mega Cap Tech
+    - "AAPL"
+    - "MSFT"
+    - "GOOGL"
+    - "AMZN"
+    - "NVDA"
+    - "META"
+    - "TSLA"
+    # Semiconductors
+    - "AVGO"
+    - "AMD"
+    - "MU"
+    - "MRVL"
+    # Software/Cloud
+    - "CRM"
+    - "SHOP"
+    - "CRWD"
+    - "SNOW"
+    # Healthcare
+    - "UNH"
+    - "LLY"
+    - "JNJ"
+    # Finance
+    - "JPM"
+    - "V"
+    - "MA"
+    # Consumer
+    - "COST"
+    - "PG"
+    # Energy
+    - "XOM"
+    - "CVX"
+  min_avg_daily_volume: 1000000

@@ -1,0 +1,63 @@
+pipeline:
+  name: "quant-trading-pipeline"
+  log_level: "INFO"
+
+data:
+  fetcher: "yfinance"
+  storage_dir: "data"
+  history_days: 1890         # ~5 years (for robust training)
+  min_history_days: 756      # ~3 years minimum
+
+universe:
+  market: "us"
+  tickers:
+    - "AAPL"
+    - "MSFT"
+    - "GOOGL"
+    - "AMZN"
+    - "NVDA"
+    - "META"
+    - "TSLA"
+    - "JPM"
+    - "V"
+    - "UNH"
+  min_avg_daily_volume: 1000000
+
+features:
+  tiers: [1, 2, 3, 4]
+  max_features: 30
+  lookback_padding_factor: 1.8
+
+labels:
+  horizon: 1                 # Predict N days ahead
+  direction_threshold: 0.0   # 0.0 = any positive return = "up"
+
+model:
+  type: "lgbm"
+  ensemble_weights:
+    lgbm: 0.6
+    xgb: 0.4
+  tune: true
+  tune_n_trials: 100
+
+validation:
+  dev_cv: "purged_kfold"
+  dev_cv_splits: 5
+  dev_cv_purge_days: 5
+  final_cv: "cpcv"
+  walk_forward_train_days: 504
+  walk_forward_test_days: 63
+  walk_forward_step_days: 63
+
+backtest:
+  initial_capital: 10000000
+  commission_pct: 0.001
+  slippage_pct: 0.001
+  confidence_threshold: 0.55
+  magnitude_threshold: 0.002
+  max_position_pct: 0.05
+
+reporting:
+  benchmark_us: "SPY"
+  benchmark_jp: "^N225"
+  output_dir: "data/reports"

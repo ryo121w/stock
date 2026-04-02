@@ -1,0 +1,133 @@
+"""Dual-head LightGBM: classifier (direction) + regressor (magnitude)."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from pathlib import Path
+
+import joblib
+import lightgbm as lgb
+import polars as pl
+import structlog
+
+from qtp.models.base import ModelWrapper
+
+logger = structlog.get_logger()
+
+
+class LGBMPipeline(ModelWrapper):
+    def __init__(self, clf_params: dict | None = None, reg_params: dict | None = None):
+        self.clf = lgb.LGBMClassifier(**(clf_params or self._default_clf_params()))
+        self.reg = lgb.LGBMRegressor(**(reg_params or self._default_reg_params()))
+        self.feature_names: list[str] = []
+        self.version: str = ""
+
+    @staticmethod
+    def _default_clf_params() -> dict:
+        return {
+            "n_estimators": 1000,
+            "learning_rate": 0.01,
+            "max_depth": 6,
+            "num_leaves": 31,
+            "min_child_samples": 20,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "reg_alpha": 0.1,
+            "reg_lambda": 0.1,
+            "random_state": 42,
+            "n_jobs": -1,
+            "verbose": -1,
+        }
+
+    @staticmethod
+    def _default_reg_params() -> dict:
+        return {
+            "n_estimators": 1000,
+            "learning_rate": 0.01,
+            "max_depth": 6,
+            "num_leaves": 31,
+            "min_child_samples": 20,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "reg_alpha": 0.1,
+            "reg_lambda": 0.1,
+            "random_state": 42,
+            "n_jobs": -1,
+            "verbose": -1,
+            "objective": "regression",
+        }
+
+    def fit(self, X: pl.DataFrame, y_direction: pl.Series, y_magnitude: pl.Series) -> None:
+        X_pd = X.to_pandas()
+        y_dir_pd = y_direction.to_pandas()
+        y_mag_pd = y_magnitude.to_pandas()
+
+        self.feature_names = list(X.columns)
+
+        # Split 80/20 for early stopping validation (time-series: use last 20%)
+        split_idx = int(len(X_pd) * 0.8)
+        X_train, X_val = X_pd.iloc[:split_idx], X_pd.iloc[split_idx:]
+        y_dir_train, y_dir_val = y_dir_pd.iloc[:split_idx], y_dir_pd.iloc[split_idx:]
+        y_mag_train, y_mag_val = y_mag_pd.iloc[:split_idx], y_mag_pd.iloc[split_idx:]
+
+        logger.info("training_classifier", n_samples=len(X_train),
+                     n_val_samples=len(X_val), n_features=len(self.feature_names))
+        self.clf.fit(
+            X_train, y_dir_train,
+            eval_set=[(X_val, y_dir_val)],
+            callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)],
+        )
+        logger.info("clf_early_stopped", best_iteration=self.clf.best_iteration_)
+
+        logger.info("training_regressor", n_samples=len(X_train))
+        self.reg.fit(
+            X_train, y_mag_train,
+            eval_set=[(X_val, y_mag_val)],
+            callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)],
+        )
+        logger.info("reg_early_stopped", best_iteration=self.reg.best_iteration_)
+
+        self.version = f"lgbm_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        logger.info("training_complete", version=self.version)
+
+    def predict_proba(self, X: pl.DataFrame) -> list[float]:
+        X_pd = X.to_pandas()
+        proba = self.clf.predict_proba(X_pd)[:, 1]
+        return proba.tolist()
+
+    def predict_magnitude(self, X: pl.DataFrame) -> list[float]:
+        X_pd = X.to_pandas()
+        mag = self.reg.predict(X_pd)
+        return mag.tolist()
+
+    def get_params(self) -> dict:
+        return {
+            "clf": self.clf.get_params(),
+            "reg": self.reg.get_params(),
+        }
+
+    def save(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        joblib.dump(self.clf, path / "clf.joblib")
+        joblib.dump(self.reg, path / "reg.joblib")
+        metadata = {
+            "version": self.version,
+            "feature_names": self.feature_names,
+            "clf_params": {k: str(v) for k, v in self.clf.get_params().items()},
+            "reg_params": {k: str(v) for k, v in self.reg.get_params().items()},
+            "created_at": datetime.now().isoformat(),
+        }
+        (path / "metadata.json").write_text(json.dumps(metadata, indent=2))
+        logger.info("model_saved", path=str(path))
+
+    @classmethod
+    def load(cls, path: Path) -> LGBMPipeline:
+        instance = cls()
+        instance.clf = joblib.load(path / "clf.joblib")
+        instance.reg = joblib.load(path / "reg.joblib")
+        metadata = json.loads((path / "metadata.json").read_text())
+        instance.version = metadata["version"]
+        instance.feature_names = metadata["feature_names"]
+        logger.info("model_loaded", version=instance.version)
+        return instance

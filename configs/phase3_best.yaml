@@ -1,0 +1,22 @@
+# Phase 3: Best config from optimization loop
+# h10_t3%: 10-day horizon, 3% threshold, AAPL/TSLA/UNH removed
+labels:
+  horizon: 10
+  direction_threshold: 0.03
+
+features:
+  tiers: [1, 2, 3, 4, 5]
+  max_features: 50
+
+universe:
+  tickers:
+    - "MSFT"
+    - "GOOGL"
+    - "AMZN"
+    - "NVDA"
+    - "META"
+    - "JPM"
+    - "V"
+
+backtest:
+  confidence_threshold: 0.55

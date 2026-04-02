@@ -15,6 +15,7 @@ import structlog
 
 from qtp.data.fetchers.base import Market
 from qtp.data.storage import ParquetStorage
+from qtp.features.cross_sectional import compute_cross_sectional_features
 from qtp.features.registry import FeatureRegistry
 
 logger = structlog.get_logger()
@@ -193,4 +194,10 @@ class FeatureEngine:
         if not frames:
             return pl.DataFrame()
 
-        return pl.concat(frames, how="diagonal_relaxed")
+        result = pl.concat(frames, how="diagonal_relaxed")
+
+        # Cross-sectional features: relative comparisons across tickers
+        # Must be computed AFTER all tickers are joined
+        result = compute_cross_sectional_features(result)
+
+        return result

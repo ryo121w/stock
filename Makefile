@@ -1,4 +1,4 @@
-.PHONY: help setup install test test-all test-slow test-parallel lint format typecheck check train train-fast run run-fast clean
+.PHONY: help setup install test test-all test-slow test-parallel lint format typecheck check train train-fast run run-fast dashboard clean
 
 PYTHON := .venv/bin/python
 PYTEST := .venv/bin/python -m pytest
@@ -110,6 +110,10 @@ backfill: ## Backfill historical predictions + grade immediately
 
 auto-retrain: ## Check accuracy + auto-retrain if degraded (<55%)
 	bash scripts/auto_retrain.sh
+
+# ── Dashboard ────────────────────────────────────────────────────────
+dashboard: ## Launch Streamlit dashboard
+	$(PYTHON) -m streamlit run dashboard/app.py
 
 # ── Cleanup ──────────────────────────────────────────────────────────
 clean: ## Remove caches and build artifacts

@@ -45,6 +45,7 @@ class PipelineRunner:
         import qtp.features.tier3_fundamental  # noqa: F401
         import qtp.features.tier4_macro  # noqa: F401
         import qtp.features.tier5_alternative  # noqa: F401
+        import qtp.features.tier5_sentiment  # noqa: F401
         import qtp.features.tier5_timeseries  # noqa: F401
 
         self.db = QTPDatabase(self.project_dir / config.data.storage_dir / "qtp.db")

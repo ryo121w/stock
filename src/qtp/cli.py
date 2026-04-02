@@ -362,6 +362,81 @@ def predictions():
 
 
 @db.command()
+@click.option("--window", "-w", default=7, help="Window size in days")
+@click.option("--windows", "-n", default=4, help="Number of rolling windows")
+def trend(window: int, windows: int):
+    """Show accuracy trend across rolling windows to detect degradation."""
+    from qtp.data.database import QTPDatabase
+
+    database = QTPDatabase(Path("data/qtp.db"))
+    console = _get_console()
+
+    results = database.get_accuracy_trend(window_days=window, n_windows=windows)
+
+    if not results:
+        click.echo("No graded predictions found. Run: make grade")
+        return
+
+    if console:
+        from rich.table import Table
+
+        table = Table(title=f"Accuracy Trend ({window}-day windows)", show_lines=False)
+        table.add_column("Window", style="dim")
+        table.add_column("Predictions", justify="right")
+        table.add_column("Accuracy", justify="right")
+        table.add_column("Trend", justify="center")
+
+        for i, r in enumerate(results):
+            acc_str = f"{r['accuracy']:.1%}"
+            if r["accuracy"] >= 0.60:
+                style = "[bold green]"
+            elif r["accuracy"] >= 0.55:
+                style = "[green]"
+            elif r["accuracy"] >= 0.50:
+                style = "[yellow]"
+            else:
+                style = "[bold red]"
+
+            # Trend arrow vs previous (older) window
+            if i < len(results) - 1:
+                prev_acc = results[i + 1]["accuracy"]
+                if r["accuracy"] > prev_acc + 0.02:
+                    trend_icon = "[green]^ improving[/]"
+                elif r["accuracy"] < prev_acc - 0.02:
+                    trend_icon = "[red]v degrading[/]"
+                else:
+                    trend_icon = "[dim]= stable[/]"
+            else:
+                trend_icon = "[dim]—[/]"
+
+            table.add_row(
+                r["window"],
+                str(r["total"]),
+                f"{style}{acc_str}[/]",
+                trend_icon,
+            )
+
+        console.print(table)
+
+        # Summary
+        newest = results[0]["accuracy"]
+        oldest = results[-1]["accuracy"]
+        delta = newest - oldest
+        if delta < -0.05:
+            console.print(
+                f"\n[bold red]WARNING: Accuracy dropped {delta:+.1%} over {len(results)} windows. "
+                f"Consider retraining (make auto-retrain).[/]"
+            )
+        elif delta > 0.05:
+            console.print(f"\n[bold green]Accuracy improving: {delta:+.1%} trend.[/]")
+        else:
+            console.print(f"\n[dim]Accuracy stable ({delta:+.1%} overall change).[/]")
+    else:
+        for r in results:
+            click.echo(f"  {r['window']}: {r['accuracy']:.1%} ({r['total']} predictions)")
+
+
+@db.command()
 def accuracy():
     """Show prediction accuracy report."""
     from qtp.data.database import QTPDatabase

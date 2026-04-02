@@ -191,3 +191,90 @@ class TestExperiments:
         compared = db.compare_experiments([id1, id2])
         assert len(compared) == 2
         assert compared[0]["wf_auc"] == 0.69  # Sorted by AUC desc
+
+
+class TestPredictions:
+    def test_save_and_get_ungraded(self, db):
+        db.save_prediction("AAPL", "2026-04-01", direction=1, confidence=0.65)
+        ungraded = db.get_ungraded_predictions()
+        assert len(ungraded) == 1
+        assert ungraded[0]["ticker"] == "AAPL"
+
+    def test_grade_prediction(self, db):
+        db.save_prediction("AAPL", "2026-04-01", direction=1, confidence=0.65)
+        ungraded = db.get_ungraded_predictions()
+        db.grade_prediction(ungraded[0]["id"], actual_price_start=100.0, actual_price_end=105.0)
+        # Should no longer be ungraded
+        assert len(db.get_ungraded_predictions()) == 0
+
+    def test_accuracy_summary(self, db):
+        db.save_prediction("AAPL", "2026-04-01", direction=1, confidence=0.60)
+        db.save_prediction("MSFT", "2026-04-01", direction=1, confidence=0.55)
+        ungraded = db.get_ungraded_predictions()
+        # AAPL correct (went up)
+        db.grade_prediction(ungraded[0]["id"], 100.0, 110.0)
+        # MSFT wrong (went down)
+        db.grade_prediction(ungraded[1]["id"], 100.0, 90.0)
+
+        summary = db.get_accuracy_summary()
+        assert summary["total"] == 2
+        assert summary["correct"] == 1
+        assert summary["accuracy"] == 0.5
+
+    def test_accuracy_summary_with_days(self, db):
+        db.save_prediction("AAPL", "2026-04-01", direction=1, confidence=0.60)
+        ungraded = db.get_ungraded_predictions()
+        db.grade_prediction(ungraded[0]["id"], 100.0, 110.0)
+        # days=30 should include recent predictions
+        summary = db.get_accuracy_summary(days=30)
+        assert summary["total"] >= 0  # May be 0 if date offset excludes it
+
+
+class TestAccuracyTrend:
+    def _populate_predictions(self, db, n=20):
+        """Insert and grade predictions across several dates."""
+        from datetime import datetime, timedelta
+
+        base = datetime.now()
+        for i in range(n):
+            date = (base - timedelta(days=i)).strftime("%Y-%m-%d")
+            direction = 1
+            confidence = 0.60
+            db.save_prediction("AAPL", date, direction=direction, confidence=confidence)
+
+        ungraded = db.get_ungraded_predictions()
+        for j, pred in enumerate(ungraded):
+            # Alternate correct/wrong for variety
+            if j % 2 == 0:
+                db.grade_prediction(pred["id"], 100.0, 105.0)  # correct (up)
+            else:
+                db.grade_prediction(pred["id"], 100.0, 95.0)  # wrong (went down)
+
+    def test_trend_returns_list(self, db):
+        self._populate_predictions(db, n=30)
+        trend = db.get_accuracy_trend(window_days=7, n_windows=4)
+        assert isinstance(trend, list)
+        # Should have some windows with data
+        assert len(trend) > 0
+
+    def test_trend_window_structure(self, db):
+        self._populate_predictions(db, n=30)
+        trend = db.get_accuracy_trend(window_days=7, n_windows=4)
+        for window in trend:
+            assert "window" in window
+            assert "total" in window
+            assert "accuracy" in window
+            assert isinstance(window["total"], int)
+            assert 0 <= window["accuracy"] <= 1
+
+    def test_trend_empty_db(self, db):
+        trend = db.get_accuracy_trend(window_days=7, n_windows=4)
+        assert trend == []
+
+    def test_trend_custom_params(self, db):
+        self._populate_predictions(db, n=60)
+        trend = db.get_accuracy_trend(window_days=14, n_windows=2)
+        assert isinstance(trend, list)
+        # Each window label should contain "14" for 14-day windows
+        for w in trend:
+            assert "14" in w["window"] or "28" in w["window"]

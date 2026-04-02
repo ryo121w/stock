@@ -681,6 +681,37 @@ class QTPDatabase:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_accuracy_trend(self, window_days: int = 7, n_windows: int = 4) -> list[dict]:
+        """Get accuracy in rolling windows to detect degradation trend.
+
+        Returns a list of dicts (newest window first), each with:
+          - window: human-readable label like "-7d to -0d"
+          - total: number of graded predictions in window
+          - accuracy: fraction correct
+        """
+        results = []
+        for i in range(n_windows):
+            end_offset = i * window_days
+            start_offset = (i + 1) * window_days
+            with self._conn() as conn:
+                row = conn.execute(
+                    """SELECT COUNT(*) as total, SUM(is_correct) as correct,
+                              AVG(is_correct) as accuracy
+                       FROM predictions
+                       WHERE graded_at IS NOT NULL
+                       AND prediction_date BETWEEN date('now', ?) AND date('now', ?)""",
+                    (f"-{start_offset} days", f"-{end_offset} days"),
+                ).fetchone()
+            if row and row["total"] and row["total"] > 0:
+                results.append(
+                    {
+                        "window": f"-{start_offset}d to -{end_offset}d",
+                        "total": row["total"],
+                        "accuracy": row["accuracy"],
+                    }
+                )
+        return results
+
     def get_recent_predictions(self, limit: int = 20) -> list[dict]:
         """Get recent predictions with grading results."""
         with self._conn() as conn:

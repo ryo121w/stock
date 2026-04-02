@@ -95,6 +95,9 @@ db-predictions: ## Show recent predictions
 db-accuracy: ## Show prediction accuracy report
 	$(QTP) db accuracy
 
+db-trend: ## Show accuracy trend (degradation detection)
+	$(QTP) db trend
+
 # ── Prediction Grading ───────────────────────────────────────────────
 grade: ## Grade past predictions with actual prices
 	$(PYTHON) scripts/grade_predictions.py
@@ -104,6 +107,9 @@ grade-report: ## Show accuracy report only (no grading)
 
 backfill: ## Backfill historical predictions + grade immediately
 	$(PYTHON) scripts/backfill_predictions.py
+
+auto-retrain: ## Check accuracy + auto-retrain if degraded (<55%)
+	bash scripts/auto_retrain.sh
 
 # ── Cleanup ──────────────────────────────────────────────────────────
 clean: ## Remove caches and build artifacts

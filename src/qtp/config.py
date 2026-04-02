@@ -26,6 +26,10 @@ class FeaturesConfig(BaseModel):
     tiers: list[int] = Field(default_factory=lambda: [1, 2])
     max_features: int = 30
     lookback_padding_factor: float = 1.8
+    selected: list[str] = Field(
+        default_factory=list,
+        description="Explicit feature subset from feature selection analysis. Empty = use all.",
+    )
 
 
 class LabelsConfig(BaseModel):

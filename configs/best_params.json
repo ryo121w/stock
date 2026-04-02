@@ -1,0 +1,42 @@
+{
+  "study_name": "ensemble_tuning",
+  "n_trials": 30,
+  "n_folds": 3,
+  "step_size": 252,
+  "confidence_threshold": 0.55,
+  "baseline_accuracy": 0.389575,
+  "best_accuracy": 0.608366,
+  "improvement": 0.21879,
+  "best_trial_number": 16,
+  "lgbm_weight": 0.3685510798236448,
+  "xgb_weight": 0.6314489201763551,
+  "lgbm_clf_params": {
+    "n_estimators": 1000,
+    "learning_rate": 0.06678249252114432,
+    "max_depth": 5,
+    "num_leaves": 16,
+    "min_child_samples": 33,
+    "subsample": 0.9371926314571077,
+    "colsample_bytree": 0.8586970567601745,
+    "reg_alpha": 0.31560577519820515,
+    "reg_lambda": 0.033496814486797546,
+    "random_state": 42,
+    "n_jobs": -1,
+    "verbose": -1
+  },
+  "xgb_clf_params": {
+    "n_estimators": 800,
+    "learning_rate": 0.07930516305170975,
+    "max_depth": 3,
+    "min_child_weight": 2.2891442770001444,
+    "subsample": 0.757402663248601,
+    "colsample_bytree": 0.7843471770979404,
+    "reg_alpha": 0.006726651992494952,
+    "reg_lambda": 0.0520925086561082,
+    "random_state": 42,
+    "n_jobs": -1,
+    "eval_metric": "logloss",
+    "verbosity": 0,
+    "early_stopping_rounds": 50
+  }
+}

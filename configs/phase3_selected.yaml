@@ -1,0 +1,44 @@
+# Phase 3 Selected: Feature-pruned config from permutation importance analysis
+# Top 20 features by permutation importance (dropped 23 noise/harmful features)
+# Result: Trade Acc 68.40% vs 65.60% (all 43), +2.8pp improvement at conf>=55%
+labels:
+  horizon: 10
+  direction_threshold: 0.03
+
+features:
+  tiers: [1, 2, 3, 4, 5]
+  max_features: 50
+  selected:
+    - yield_10y
+    - yield_10y_change_21d
+    - price_to_52w_low
+    - vix_level
+    - sp500_dist_sma50
+    - dist_sma200
+    - sp500_ret_21d
+    - vix_change_5d
+    - atr_14
+    - realized_vol_63d
+    - dist_sma50
+    - realized_vol_21d
+    - macd_signal
+    - eps_revision_7d
+    - roc_20
+    - range_52w_position
+    - max_drawdown_63d
+    - ret_63d
+    - lower_shadow_ratio
+    - ret_5d
+
+universe:
+  tickers:
+    - "MSFT"
+    - "GOOGL"
+    - "AMZN"
+    - "NVDA"
+    - "META"
+    - "JPM"
+    - "V"
+
+backtest:
+  confidence_threshold: 0.55

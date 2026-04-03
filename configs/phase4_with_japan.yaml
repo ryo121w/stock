@@ -1,0 +1,34 @@
+# Phase 4+: Multi-sector + Japan (14 tickers)
+labels:
+  horizon: 10
+  direction_threshold: 0.03
+
+features:
+  tiers: [1, 2, 3, 4, 5]
+  max_features: 70
+
+universe:
+  tickers:
+    # US Tech
+    - "MSFT"
+    - "GOOGL"
+    - "AMZN"
+    - "NVDA"
+    - "META"
+    # US Finance
+    - "JPM"
+    - "V"
+    # US Consumer
+    - "COST"
+    # US Energy
+    - "XOM"
+    - "CVX"
+    # US Healthcare
+    - "LLY"
+    - "JNJ"
+    # Japan (NEW)
+    - "9101.T"    # 日本郵船 — 66.7% accuracy, +3.96% avg return
+    - "6758.T"    # ソニー — 100% accuracy (small sample), +7.16%
+
+backtest:
+  confidence_threshold: 0.55

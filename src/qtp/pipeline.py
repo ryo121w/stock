@@ -254,7 +254,7 @@ class PipelineRunner:
         return version
 
     def run_predict(self, model_version: str | None = None) -> list[PredictionResult]:
-        """Generate predictions for today."""
+        """Generate predictions for today using multi-ticker dataset (includes cross-sectional features)."""
         today = date.today()
         model = (
             self.model_store.load(model_version)
@@ -262,21 +262,52 @@ class PipelineRunner:
             else self.model_store.load_latest()
         )
 
+        # Build multi-ticker features (same as training) to include cross-sectional features
+        try:
+            all_features = self.feature_engine.build_multi_ticker_features(
+                tickers=self.universe.tickers(),
+                market=self.market,
+                as_of=today,
+                tiers=self.config.features.tiers,
+            )
+        except Exception:
+            # Fallback: build features without cross-sectional
+            all_features = pl.DataFrame()
+
+        # Get expected feature names from model metadata
+        model_features = getattr(model, "feature_names", [])
+
         predictions: list[PredictionResult] = []
         for ticker in self.universe:
             try:
-                features = self.feature_engine.compute_features(
-                    ticker,
-                    self.market,
-                    as_of=today,
-                    tiers=self.config.features.tiers,
-                )
-                if features.height == 0:
-                    continue
+                if all_features.height > 0 and "ticker" in all_features.columns:
+                    ticker_data = all_features.filter(pl.col("ticker") == ticker)
+                    if ticker_data.height == 0:
+                        continue
+                    latest = ticker_data.tail(1)
+                else:
+                    features = self.feature_engine.compute_features(
+                        ticker,
+                        self.market,
+                        as_of=today,
+                        tiers=self.config.features.tiers,
+                    )
+                    if features.height == 0:
+                        continue
+                    latest = features.tail(1)
 
-                # Use only the latest row for prediction
-                latest = features.tail(1)
-                feature_cols = [c for c in latest.columns if c != "date"]
+                # Align features with model's expected features
+                available_cols = [c for c in latest.columns if c not in ("date", "ticker")]
+                if model_features:
+                    feature_cols = [c for c in model_features if c in available_cols]
+                    # Add missing features as 0
+                    for c in model_features:
+                        if c not in available_cols:
+                            latest = latest.with_columns(pl.lit(0.0).alias(c))
+                    feature_cols = model_features
+                else:
+                    feature_cols = available_cols
+
                 X = latest.select(feature_cols)
 
                 proba = model.predict_proba(X)[0]
@@ -285,7 +316,7 @@ class PipelineRunner:
                 predictions.append(
                     PredictionResult(
                         ticker=ticker,
-                        prediction_date=today + timedelta(days=1),
+                        prediction_date=today + timedelta(days=self.config.labels.horizon),
                         direction=1 if proba >= 0.5 else 0,
                         direction_proba=proba,
                         magnitude=magnitude,

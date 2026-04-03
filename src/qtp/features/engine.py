@@ -201,3 +201,28 @@ class FeatureEngine:
         result = compute_cross_sectional_features(result)
 
         return result
+
+    def build_multi_ticker_features(
+        self,
+        tickers: list[str],
+        market: Market,
+        as_of: date,
+        tiers: list[int] | None = None,
+    ) -> pl.DataFrame:
+        """Build features for multiple tickers (no labels). Used for prediction."""
+        frames: list[pl.DataFrame] = []
+        for ticker in tickers:
+            try:
+                feats = self.compute_features(ticker, market, as_of=as_of, tiers=tiers)
+                if feats.height > 0:
+                    feats = feats.with_columns(pl.lit(ticker).alias("ticker"))
+                    frames.append(feats)
+            except Exception as e:
+                logger.error("compute_features_failed", ticker=ticker, error=str(e))
+
+        if not frames:
+            return pl.DataFrame()
+
+        result = pl.concat(frames, how="diagonal_relaxed")
+        result = compute_cross_sectional_features(result)
+        return result

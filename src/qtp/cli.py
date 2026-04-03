@@ -561,9 +561,9 @@ def signal(ticker: str, config: str, market_config: str | None):
         info = tk.info or {}
         yahoo_quote = {
             "price": info.get("currentPrice") or info.get("regularMarketPrice", 0),
-            "revenueGrowth": (info.get("revenueGrowth", 0) or 0) * 100,
-            "earningsGrowth": (info.get("earningsGrowth", 0) or 0) * 100,
-            "returnOnEquity": (info.get("returnOnEquity", 0) or 0) * 100,
+            "revenueGrowth": info.get("revenueGrowth", 0) or 0,
+            "earningsGrowth": info.get("earningsGrowth", 0) or 0,
+            "returnOnEquity": info.get("returnOnEquity", 0) or 0,
         }
         analyst_est = {
             "targetMeanPrice": info.get("targetMeanPrice"),
@@ -571,11 +571,53 @@ def signal(ticker: str, config: str, market_config: str | None):
     except Exception:
         pass
 
+    # Helper to display results and exit early
+    def _display_and_exit(gate_results: list[GateResult], early_fail: str | None = None):
+        """Display gate results table. Called for both early exit and normal flow."""
+        if console:
+            from rich.table import Table as RTable
+
+            table = RTable(title=f"7-Gate Signal: {ticker}", show_lines=True)
+            table.add_column("Gate", style="bold")
+            table.add_column("Pass", justify="center")
+            table.add_column("Score", justify="right")
+            table.add_column("Reason")
+            table.add_column("Warnings", style="dim")
+
+            for r in gate_results:
+                passed_str = "[bold green]PASS[/]" if r.passed else "[bold red]FAIL[/]"
+                score_str = f"{r.score:.0f}"
+                if r.score >= 70:
+                    score_str = f"[green]{score_str}[/]"
+                elif r.score >= 50:
+                    score_str = f"[yellow]{score_str}[/]"
+                else:
+                    score_str = f"[red]{score_str}[/]"
+                warnings = "; ".join(r.warnings) if r.warnings else ""
+                table.add_row(r.gate, passed_str, score_str, r.reason, warnings)
+
+            console.print(table)
+
+            if early_fail:
+                console.print(f"\n[bold red]>>> EARLY EXIT: AVOID {ticker} — {early_fail} <<<[/]")
+        else:
+            click.echo(f"\n7-Gate Signal: {ticker}")
+            click.echo("=" * 50)
+            for r in gate_results:
+                status = "PASS" if r.passed else "FAIL"
+                click.echo(f"  {r.gate:15s} [{status}] score={r.score:.0f}  {r.reason}")
+            if early_fail:
+                click.echo(f"\n  >>> AVOID — {early_fail} <<<")
+
     # -- Gate 1: QTP quantitative model -----------------------------------
     from qtp.gates.gate1_qtp import Gate1_QTP
 
     g1 = Gate1_QTP(db).evaluate(ticker)
     results.append(g1)
+
+    if not g1.passed:
+        _display_and_exit(results, early_fail=f"Gate1 (QTP) FAIL: {g1.reason}")
+        return
 
     # -- Gate 2: Technical analysis ---------------------------------------
     try:
@@ -591,6 +633,10 @@ def signal(ticker: str, config: str, market_config: str | None):
         g2 = GateResult(gate="Technical", passed=True, score=50.0, reason=f"skipped: {exc}")
     results.append(g2)
 
+    if not g2.passed:
+        _display_and_exit(results, early_fail=f"Gate2 (Technical) FAIL: {g2.reason}")
+        return
+
     # -- Gate 3: Fundamental analysis -------------------------------------
     try:
         from qtp.gates.gate3_fundamental import Gate3_Fundamental
@@ -605,8 +651,11 @@ def signal(ticker: str, config: str, market_config: str | None):
         g3 = GateResult(gate="Fundamental", passed=True, score=50.0, reason=f"skipped: {exc}")
     results.append(g3)
 
+    if not g3.passed:
+        _display_and_exit(results, early_fail=f"Gate3 (Fundamental) FAIL: {g3.reason}")
+        return
+
     # -- Gate 4: MAGI consensus (needs pre-computed votes) ----------------
-    # In CLI mode, MAGI votes come from cache or default to neutral
     cached_verdict = db.get_cached_verdict(ticker) if hasattr(db, "get_cached_verdict") else None
     try:
         if cached_verdict and cached_verdict.get("gate4_score"):
@@ -627,6 +676,10 @@ def signal(ticker: str, config: str, market_config: str | None):
         g4 = GateResult(gate="MAGI", passed=True, score=50.0, reason=f"skipped: {exc}")
     results.append(g4)
 
+    if not g4.passed:
+        _display_and_exit(results, early_fail=f"Gate4 (MAGI) FAIL: {g4.reason}")
+        return
+
     # -- Gate 5: Sentiment (soft gate, default neutral) -------------------
     try:
         from qtp.gates.gate5_sentiment import Gate5_Sentiment
@@ -642,7 +695,6 @@ def signal(ticker: str, config: str, market_config: str | None):
 
         g6 = Gate6_Integration().evaluate(results)
     except (ImportError, Exception) as exc:
-        # Fallback: simple average
         avg = sum(r.score for r in results) / max(len(results), 1)
         all_hard_passed = all(r.passed for r in results[:4])
         g6 = GateResult(
@@ -669,32 +721,11 @@ def signal(ticker: str, config: str, market_config: str | None):
     results.append(g7)
 
     # -- Display results --------------------------------------------------
+    _display_and_exit(results)
+
+    # Final verdict banner
+    final = results[-1]
     if console:
-        from rich.table import Table
-
-        table = Table(title=f"7-Gate Signal: {ticker}", show_lines=True)
-        table.add_column("Gate", style="bold")
-        table.add_column("Pass", justify="center")
-        table.add_column("Score", justify="right")
-        table.add_column("Reason")
-        table.add_column("Warnings", style="dim")
-
-        for r in results:
-            passed_str = "[bold green]PASS[/]" if r.passed else "[bold red]FAIL[/]"
-            score_str = f"{r.score:.0f}"
-            if r.score >= 70:
-                score_str = f"[green]{score_str}[/]"
-            elif r.score >= 50:
-                score_str = f"[yellow]{score_str}[/]"
-            else:
-                score_str = f"[red]{score_str}[/]"
-            warnings = "; ".join(r.warnings) if r.warnings else ""
-            table.add_row(r.gate, passed_str, score_str, r.reason, warnings)
-
-        console.print(table)
-
-        # Final verdict banner
-        final = results[-1]
         if final.passed and final.score >= 70:
             console.print(
                 f"\n[bold green]>>> SIGNAL: BUY {ticker} (score={final.score:.0f}) <<<[/]"
@@ -708,14 +739,6 @@ def signal(ticker: str, config: str, market_config: str | None):
                 f"\n[bold red]>>> SIGNAL: AVOID {ticker} (score={final.score:.0f}) <<<[/]"
             )
     else:
-        click.echo(f"\n7-Gate Signal: {ticker}")
-        click.echo("=" * 50)
-        for r in results:
-            status = "PASS" if r.passed else "FAIL"
-            click.echo(f"  {r.gate:15s} [{status}] score={r.score:.0f}  {r.reason}")
-            for w in r.warnings:
-                click.echo(f"    WARNING: {w}")
-        final = results[-1]
         verdict = (
             "BUY" if final.passed and final.score >= 70 else ("HOLD" if final.passed else "AVOID")
         )

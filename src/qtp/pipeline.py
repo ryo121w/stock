@@ -45,6 +45,8 @@ class PipelineRunner:
         import qtp.features.tier3_fundamental  # noqa: F401
         import qtp.features.tier4_macro  # noqa: F401
         import qtp.features.tier5_alternative  # noqa: F401
+        import qtp.features.tier5_edgar_insider  # noqa: F401
+        import qtp.features.tier5_fear_greed  # noqa: F401
         import qtp.features.tier5_sentiment  # noqa: F401
         import qtp.features.tier5_timeseries  # noqa: F401
         import qtp.features.tier6_fundamental_ts  # noqa: F401
@@ -108,6 +110,24 @@ class PipelineRunner:
         # Separate features, labels
         label_cols = ["label_direction", "label_magnitude", "date", "ticker"]
         feature_cols = [c for c in dataset.columns if c not in label_cols]
+
+        # Apply feature selection from config (if specified)
+        if self.config.features.selected:
+            selected_set = set(self.config.features.selected)
+            feature_cols = [c for c in feature_cols if c in selected_set]
+            logger.info(
+                "feature_selection_applied",
+                selected=len(feature_cols),
+                total=len(dataset.columns) - len(label_cols),
+            )
+
+        # Apply feature exclusion from config (if specified)
+        if hasattr(self.config.features, "excluded") and self.config.features.excluded:
+            excluded_set = set(self.config.features.excluded)
+            feature_cols = [c for c in feature_cols if c not in excluded_set]
+            logger.info(
+                "feature_exclusion_applied", excluded=len(excluded_set), remaining=len(feature_cols)
+            )
 
         X = dataset.select(feature_cols)
         y_direction = dataset["label_direction"]

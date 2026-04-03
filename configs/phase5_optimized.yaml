@@ -1,0 +1,50 @@
+# Phase 5: Optimized — 50 features, 14 tickers (V/MSFT removed: coin-flip accuracy)
+# WF Accuracy: 64.6% | AUC: 0.7185 | Win Rate: 60.1%
+# vs Phase4: 63.5% | 0.7278 | 60.3%
+labels:
+  horizon: 10
+  direction_threshold: 0.03
+
+features:
+  tiers: [1, 2, 3, 4, 5, 6]
+  max_features: 70
+  excluded:
+    - "lower_shadow_ratio"
+    - "eps_revision_7d"
+    - "analyst_net_upgrades"
+    - "insider_net_signal"
+    - "days_to_earnings"
+    - "earnings_proximity"
+    - "market_regime_label"
+    - "eps_revision_trend_7d"
+    - "target_price_gap_change"
+    - "news_volume"
+    - "insider_signal_proxy"
+    - "dist_sma50"
+    - "max_drawdown_63d"
+    - "price_to_52w_high"
+    - "intraday_range"
+    - "vix_change_5d"
+    - "news_sentiment_avg"
+    - "net_income_acceleration"
+
+universe:
+  tickers:
+    # Removed: MSFT (51.0%), V (50.2%)
+    - "GOOGL"
+    - "AMZN"
+    - "NVDA"
+    - "META"
+    - "JPM"
+    - "COST"
+    - "XOM"
+    - "CVX"
+    - "LLY"
+    - "JNJ"
+    - "9101.T"
+    - "6758.T"
+    - "8316.T"
+    - "8001.T"
+
+backtest:
+  confidence_threshold: 0.55

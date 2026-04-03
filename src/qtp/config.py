@@ -30,6 +30,10 @@ class FeaturesConfig(BaseModel):
         default_factory=list,
         description="Explicit feature subset from feature selection analysis. Empty = use all.",
     )
+    excluded: list[str] = Field(
+        default_factory=list,
+        description="Features to exclude (e.g., zero-importance features). Applied after tier loading.",
+    )
 
 
 class LabelsConfig(BaseModel):

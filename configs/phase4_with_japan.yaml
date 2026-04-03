@@ -4,7 +4,7 @@ labels:
   direction_threshold: 0.03
 
 features:
-  tiers: [1, 2, 3, 4, 5]
+  tiers: [1, 2, 3, 4, 5, 6]
   max_features: 70
 
 universe:
@@ -26,9 +26,11 @@ universe:
     # US Healthcare
     - "LLY"
     - "JNJ"
-    # Japan (NEW)
+    # Japan
     - "9101.T"    # 日本郵船 — 66.7% accuracy, +3.96% avg return
     - "6758.T"    # ソニー — 100% accuracy (small sample), +7.16%
+    - "8316.T"    # 三井住友FG — 85.7% accuracy, 利上げカタリスト
+    - "8001.T"    # 伊藤忠商事 — 88.9% accuracy
 
 backtest:
   confidence_threshold: 0.55

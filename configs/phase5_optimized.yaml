@@ -1,6 +1,6 @@
-# Phase 5: Optimized — 50 features, 14 tickers (V/MSFT removed: coin-flip accuracy)
-# WF Accuracy: 64.6% | AUC: 0.7185 | Win Rate: 60.1%
-# vs Phase4: 63.5% | 0.7278 | 60.3%
+# Phase 5.1: Optimized — 54 features (50 base + 4 EDGAR/F&G), 13 tickers
+# Removed: MSFT (51.0%), V (50.2%), 6758.T Sony (36.4% = inverse signal)
+# WF Accuracy: 66.1% → TBD after Sony removal
 labels:
   horizon: 10
   direction_threshold: 0.03
@@ -42,7 +42,7 @@ universe:
     - "LLY"
     - "JNJ"
     - "9101.T"
-    - "6758.T"
+    # Removed: 6758.T Sony (36.4% = worse than coin flip, inverse signal)
     - "8316.T"
     - "8001.T"
 

@@ -1,0 +1,32 @@
+# Phase 4: Multi-sector universe (12 tickers)
+# Based on accuracy evaluation across Tech, Energy, Healthcare, Finance
+labels:
+  horizon: 10
+  direction_threshold: 0.03
+
+features:
+  tiers: [1, 2, 3, 4, 5]
+  max_features: 70
+
+universe:
+  tickers:
+    # Tech (Phase 3 survivors)
+    - "MSFT"
+    - "GOOGL"
+    - "AMZN"
+    - "NVDA"
+    - "META"
+    # Finance
+    - "JPM"
+    - "V"
+    # Consumer
+    - "COST"
+    # Energy (NEW - sector strongest)
+    - "XOM"     # 62.9% accuracy
+    - "CVX"     # 55.7% accuracy
+    # Healthcare (NEW - highest accuracy)
+    - "LLY"     # 75.9% accuracy (best overall!)
+    - "JNJ"     # 74.2% accuracy
+
+backtest:
+  confidence_threshold: 0.55

@@ -14,6 +14,7 @@ import numpy as np
 @dataclass
 class WalkForwardSplit:
     """Metadata for a single walk-forward fold."""
+
     fold: int
     train_start: int
     train_end: int
@@ -54,14 +55,20 @@ class ExpandingWindowCV:
         test_size: int = 63,
         step_size: int = 63,
         purge_gap: int = 5,
+        max_train_size: int | None = None,
     ):
         self.min_train_size = min_train_size
         self.test_size = test_size
         self.step_size = step_size
         self.purge_gap = purge_gap
+        self.max_train_size = max_train_size  # None = expanding, int = sliding window
 
     def split(self, X, y=None, groups=None):
         """Generate (train_idx, test_idx) tuples.
+
+        When max_train_size is set, uses a sliding window (fixed-size train set)
+        instead of expanding window. This prevents old market regimes from
+        diluting the model's understanding of current conditions.
 
         Yields
         ------
@@ -77,7 +84,13 @@ class ExpandingWindowCV:
             test_end = test_start + self.test_size
             train_end = test_start - self.purge_gap  # Leave gap before test
 
-            train_idx = np.arange(0, train_end)
+            # Sliding window: limit train start to keep window size <= max_train_size
+            if self.max_train_size is not None:
+                train_start = max(0, train_end - self.max_train_size)
+            else:
+                train_start = 0
+
+            train_idx = np.arange(train_start, train_end)
             test_idx = np.arange(test_start, test_end)
 
             if len(train_idx) >= self.min_train_size and len(test_idx) > 0:
@@ -95,14 +108,21 @@ class ExpandingWindowCV:
             test_end = test_start + self.test_size
             train_end = test_start - self.purge_gap
 
-            if train_end >= self.min_train_size:
-                splits.append(WalkForwardSplit(
-                    fold=fold,
-                    train_start=0,
-                    train_end=train_end,
-                    test_start=test_start,
-                    test_end=test_end,
-                ))
+            if self.max_train_size is not None:
+                train_start = max(0, train_end - self.max_train_size)
+            else:
+                train_start = 0
+
+            if (train_end - train_start) >= self.min_train_size:
+                splits.append(
+                    WalkForwardSplit(
+                        fold=fold,
+                        train_start=train_start,
+                        train_end=train_end,
+                        test_start=test_start,
+                        test_end=test_end,
+                    )
+                )
                 fold += 1
 
             test_start += self.step_size

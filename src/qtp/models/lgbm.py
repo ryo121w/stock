@@ -58,10 +58,17 @@ class LGBMPipeline(ModelWrapper):
             "objective": "regression",
         }
 
-    def fit(self, X: pl.DataFrame, y_direction: pl.Series, y_magnitude: pl.Series) -> None:
+    def fit(
+        self,
+        X: pl.DataFrame,
+        y_direction: pl.Series,
+        y_magnitude: pl.Series,
+        sample_weight: pl.Series | None = None,
+    ) -> None:
         X_pd = X.to_pandas()
         y_dir_pd = y_direction.to_pandas()
         y_mag_pd = y_magnitude.to_pandas()
+        w_pd = sample_weight.to_pandas() if sample_weight is not None else None
 
         self.feature_names = list(X.columns)
 
@@ -70,11 +77,18 @@ class LGBMPipeline(ModelWrapper):
         X_train, X_val = X_pd.iloc[:split_idx], X_pd.iloc[split_idx:]
         y_dir_train, y_dir_val = y_dir_pd.iloc[:split_idx], y_dir_pd.iloc[split_idx:]
         y_mag_train, y_mag_val = y_mag_pd.iloc[:split_idx], y_mag_pd.iloc[split_idx:]
+        w_train = w_pd.iloc[:split_idx] if w_pd is not None else None
 
-        logger.info("training_classifier", n_samples=len(X_train),
-                     n_val_samples=len(X_val), n_features=len(self.feature_names))
+        logger.info(
+            "training_classifier",
+            n_samples=len(X_train),
+            n_val_samples=len(X_val),
+            n_features=len(self.feature_names),
+        )
         self.clf.fit(
-            X_train, y_dir_train,
+            X_train,
+            y_dir_train,
+            sample_weight=w_train,
             eval_set=[(X_val, y_dir_val)],
             callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)],
         )
@@ -82,7 +96,9 @@ class LGBMPipeline(ModelWrapper):
 
         logger.info("training_regressor", n_samples=len(X_train))
         self.reg.fit(
-            X_train, y_mag_train,
+            X_train,
+            y_mag_train,
+            sample_weight=w_train,
             eval_set=[(X_val, y_mag_val)],
             callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)],
         )

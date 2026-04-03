@@ -133,6 +133,11 @@ class PipelineRunner:
         y_direction = dataset["label_direction"]
         y_magnitude = dataset["label_magnitude"]
 
+        # Sample weights: disabled — incompatible with Walk-Forward CV
+        # (early folds have only old data; weighting it down starves the model)
+        # TODO: Re-enable with Sliding Window CV where train window is fixed-size
+        sample_weight = None
+
         logger.info(
             "training_dataset",
             rows=X.height,
@@ -142,19 +147,21 @@ class PipelineRunner:
 
         # Train
         model = LGBMPipeline()
-        model.fit(X, y_direction, y_magnitude)
+        model.fit(X, y_direction, y_magnitude, sample_weight=sample_weight)
 
-        # Primary evaluation: Expanding Window Walk-Forward CV
+        # Primary evaluation: Walk-Forward CV (expanding or sliding window)
         wf_cv = ExpandingWindowCV(
             min_train_size=self.config.validation.walk_forward_train_days,
             test_size=self.config.validation.walk_forward_test_days,
             step_size=self.config.validation.walk_forward_step_days,
             purge_gap=self.config.validation.dev_cv_purge_days,
+            max_train_size=self.config.validation.walk_forward_max_train_days,
         )
 
         X_np = X.to_pandas().values
         y_dir_np = y_direction.to_numpy()
         y_mag_np = y_magnitude.to_numpy()
+        w_np = sample_weight.to_numpy() if sample_weight is not None else None
 
         commission_bps = self.config.backtest.commission_pct * 100  # to bps
         slippage_bps = self.config.backtest.slippage_pct * 100
@@ -168,10 +175,12 @@ class PipelineRunner:
             if max_wf_folds and fold_i >= max_wf_folds:
                 break
             fold_model = LGBMPipeline()
+            fold_w = pl.Series(w_np[train_idx]) if w_np is not None else None
             fold_model.fit(
                 X[train_idx],
                 pl.Series(y_dir_np[train_idx]),
                 pl.Series(y_mag_np[train_idx]),
+                sample_weight=fold_w,
             )
             pred_proba = np.array(fold_model.predict_proba(X[test_idx]))
             pred_mag = np.array(fold_model.predict_magnitude(X[test_idx]))
@@ -203,10 +212,12 @@ class PipelineRunner:
             )
             for train_idx, test_idx in pkf_cv.split(X_np):
                 fold_model = LGBMPipeline()
+                fold_w = pl.Series(w_np[train_idx]) if w_np is not None else None
                 fold_model.fit(
                     X[train_idx],
                     pl.Series(y_dir_np[train_idx]),
                     pl.Series(y_mag_np[train_idx]),
+                    sample_weight=fold_w,
                 )
                 pred_proba = np.array(fold_model.predict_proba(X[test_idx]))
                 pred_mag = np.array(fold_model.predict_magnitude(X[test_idx]))

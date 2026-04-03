@@ -56,6 +56,7 @@ class ValidationConfig(BaseModel):
     walk_forward_train_days: int = 504
     walk_forward_test_days: int = 63
     walk_forward_step_days: int = 63
+    walk_forward_max_train_days: int | None = None  # None=expanding, int=sliding window
 
 
 class BacktestConfig(BaseModel):

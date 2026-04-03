@@ -1,6 +1,11 @@
 # Phase 5.1: Optimized — 54 features (50 base + 4 EDGAR/F&G), 13 tickers
 # Removed: MSFT (51.0%), V (50.2%), 6758.T Sony (36.4% = inverse signal)
 # WF Accuracy: 66.1% → TBD after Sony removal
+
+data:
+  history_days: 2520   # ~7-10 years of OHLCV for backtesting
+  min_history_days: 504
+
 labels:
   horizon: 10
   direction_threshold: 0.03

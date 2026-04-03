@@ -1,4 +1,4 @@
-.PHONY: help setup install test test-all test-slow test-parallel lint format typecheck check train train-fast run run-fast dashboard clean
+.PHONY: help setup install test test-all test-slow test-parallel lint format typecheck check train train-fast run run-fast dashboard clean signal validate-gates
 
 PYTHON := .venv/bin/python
 PYTEST := .venv/bin/python -m pytest
@@ -110,6 +110,13 @@ backfill: ## Backfill historical predictions + grade immediately
 
 auto-retrain: ## Check accuracy + auto-retrain if degraded (<55%)
 	bash scripts/auto_retrain.sh
+
+# ── 7-Gate Signal ───────────────────────────────────────────────────
+signal: ## Run 7-gate signal for a ticker (usage: make signal TICKER=8316.T)
+	$(QTP) signal $(TICKER)
+
+validate-gates: ## Validate gate system against historical predictions
+	$(PYTHON) scripts/validate_gates.py
 
 # ── Dashboard ────────────────────────────────────────────────────────
 dashboard: ## Launch Streamlit dashboard

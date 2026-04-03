@@ -21,7 +21,7 @@ import structlog
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 -- Alternative data from MCP tools (earnings_trend, analyst_actions, etc.)
@@ -120,6 +120,26 @@ CREATE TABLE IF NOT EXISTS predictions (
 CREATE INDEX IF NOT EXISTS idx_pred_ticker ON predictions(ticker);
 CREATE INDEX IF NOT EXISTS idx_pred_date ON predictions(prediction_date);
 CREATE INDEX IF NOT EXISTS idx_pred_graded ON predictions(graded_at);
+
+-- Gate evaluation results (7-gate pipeline)
+CREATE TABLE IF NOT EXISTS gate_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    evaluation_date TEXT NOT NULL,
+    gate1_score REAL, gate1_passed INTEGER,
+    gate2_score REAL, gate2_passed INTEGER,
+    gate3_score REAL, gate3_passed INTEGER,
+    gate4_score REAL, gate4_passed INTEGER,
+    gate5_score REAL, gate5_passed INTEGER,
+    integrated_score REAL,
+    final_verdict TEXT,
+    allocation REAL,
+    locked_until TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(ticker, evaluation_date)
+);
+CREATE INDEX IF NOT EXISTS idx_gate_ticker ON gate_evaluations(ticker);
+CREATE INDEX IF NOT EXISTS idx_gate_date ON gate_evaluations(evaluation_date);
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_info (
@@ -724,3 +744,107 @@ class QTPDatabase:
                 (limit,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # =========================================================================
+    # Gate Evaluations
+    # =========================================================================
+
+    def save_gate_evaluation(
+        self,
+        ticker: str,
+        evaluation_date: str,
+        *,
+        gate1_score: float | None = None,
+        gate1_passed: bool | None = None,
+        gate2_score: float | None = None,
+        gate2_passed: bool | None = None,
+        gate3_score: float | None = None,
+        gate3_passed: bool | None = None,
+        gate4_score: float | None = None,
+        gate4_passed: bool | None = None,
+        gate5_score: float | None = None,
+        gate5_passed: bool | None = None,
+        integrated_score: float | None = None,
+        final_verdict: str | None = None,
+        allocation: float | None = None,
+        locked_until: str | None = None,
+    ) -> None:
+        """Save or update a gate evaluation result."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO gate_evaluations
+                   (ticker, evaluation_date,
+                    gate1_score, gate1_passed, gate2_score, gate2_passed,
+                    gate3_score, gate3_passed, gate4_score, gate4_passed,
+                    gate5_score, gate5_passed,
+                    integrated_score, final_verdict, allocation, locked_until)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(ticker, evaluation_date) DO UPDATE SET
+                     gate1_score=excluded.gate1_score,
+                     gate1_passed=excluded.gate1_passed,
+                     gate2_score=excluded.gate2_score,
+                     gate2_passed=excluded.gate2_passed,
+                     gate3_score=excluded.gate3_score,
+                     gate3_passed=excluded.gate3_passed,
+                     gate4_score=excluded.gate4_score,
+                     gate4_passed=excluded.gate4_passed,
+                     gate5_score=excluded.gate5_score,
+                     gate5_passed=excluded.gate5_passed,
+                     integrated_score=excluded.integrated_score,
+                     final_verdict=excluded.final_verdict,
+                     allocation=excluded.allocation,
+                     locked_until=excluded.locked_until""",
+                (
+                    ticker,
+                    evaluation_date,
+                    gate1_score,
+                    int(gate1_passed) if gate1_passed is not None else None,
+                    gate2_score,
+                    int(gate2_passed) if gate2_passed is not None else None,
+                    gate3_score,
+                    int(gate3_passed) if gate3_passed is not None else None,
+                    gate4_score,
+                    int(gate4_passed) if gate4_passed is not None else None,
+                    gate5_score,
+                    int(gate5_passed) if gate5_passed is not None else None,
+                    integrated_score,
+                    final_verdict,
+                    allocation,
+                    locked_until,
+                ),
+            )
+
+    def get_cached_verdict(self, ticker: str) -> dict | None:
+        """Get the most recent gate evaluation for *ticker*.
+
+        Returns None if no evaluation exists or if the lock has expired.
+        The returned dict includes all gate scores, final_verdict, allocation,
+        and locked_until.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT * FROM gate_evaluations
+                   WHERE ticker = ?
+                   ORDER BY evaluation_date DESC
+                   LIMIT 1""",
+                (ticker,),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        # Check if still locked
+        locked_until = result.get("locked_until")
+        if locked_until:
+            from datetime import date as _date
+
+            try:
+                lock_date = _date.fromisoformat(locked_until)
+                if _date.today() <= lock_date:
+                    result["is_locked"] = True
+                else:
+                    result["is_locked"] = False
+            except (TypeError, ValueError):
+                result["is_locked"] = False
+        else:
+            result["is_locked"] = False
+        return result

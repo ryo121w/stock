@@ -504,5 +504,153 @@ def grade():
     raise SystemExit(result.returncode)
 
 
+# =============================================================================
+# 7-Gate Signal command
+# =============================================================================
+
+
+@main.command()
+@click.argument("ticker")
+@click.option("--config", "-c", type=str, default="configs/default.yaml")
+@click.option("--market-config", "-m", type=str, default=None)
+def signal(ticker: str, config: str, market_config: str | None):
+    """Run 7-gate evaluation for a ticker."""
+    setup_logging()
+    from qtp.data.database import QTPDatabase
+    from qtp.gates import GateResult
+
+    db = QTPDatabase(Path("data/qtp.db"))
+    console = _get_console()
+
+    results: list[GateResult] = []
+
+    # -- Gate 1: QTP quantitative model -----------------------------------
+    from qtp.gates.gate1_qtp import Gate1_QTP
+
+    g1 = Gate1_QTP(db).evaluate(ticker)
+    results.append(g1)
+
+    # -- Gate 2: Technical analysis ---------------------------------------
+    try:
+        from qtp.gates.gate2_technical import Gate2_Technical
+
+        g2 = Gate2_Technical().evaluate({"ticker": ticker})
+    except (ImportError, Exception) as exc:
+        g2 = GateResult(gate="Technical", passed=False, score=0.0, reason=f"skipped: {exc}")
+    results.append(g2)
+
+    # -- Gate 3: Fundamental analysis -------------------------------------
+    try:
+        from qtp.gates.gate3_fundamental import Gate3_Fundamental
+
+        g3 = Gate3_Fundamental().evaluate({"ticker": ticker})
+    except (ImportError, Exception) as exc:
+        g3 = GateResult(gate="Fundamental", passed=False, score=0.0, reason=f"skipped: {exc}")
+    results.append(g3)
+
+    # -- Gate 4: MAGI consensus -------------------------------------------
+    try:
+        from qtp.gates.gate4_magi import Gate4_MAGI
+
+        g4 = Gate4_MAGI().evaluate({"ticker": ticker})
+    except (ImportError, Exception) as exc:
+        g4 = GateResult(gate="MAGI", passed=False, score=0.0, reason=f"skipped: {exc}")
+    results.append(g4)
+
+    # -- Gate 5: Sentiment (soft gate) ------------------------------------
+    try:
+        from qtp.gates.gate5_sentiment import Gate5_Sentiment
+
+        g5 = Gate5_Sentiment().evaluate({"ticker": ticker})
+    except (ImportError, Exception) as exc:
+        g5 = GateResult(gate="Sentiment", passed=True, score=50.0, reason=f"skipped: {exc}")
+    results.append(g5)
+
+    # -- Gate 6: Integration (weighted composite) -------------------------
+    try:
+        from qtp.gates.gate6_integration import Gate6_Integration
+
+        g6 = Gate6_Integration().evaluate(results)
+    except (ImportError, Exception) as exc:
+        # Fallback: simple average
+        avg = sum(r.score for r in results) / max(len(results), 1)
+        all_hard_passed = all(r.passed for r in results[:4])
+        g6 = GateResult(
+            gate="Integration",
+            passed=all_hard_passed,
+            score=avg,
+            reason=f"fallback avg: {exc}",
+        )
+    results.append(g6)
+
+    # -- Gate 7: Final verdict --------------------------------------------
+    try:
+        from qtp.gates.gate7_verdict import Gate7_Verdict
+
+        g7 = Gate7_Verdict().evaluate(g6)
+    except (ImportError, Exception) as exc:
+        verdict = "BUY" if g6.passed and g6.score >= 70 else ("HOLD" if g6.passed else "AVOID")
+        g7 = GateResult(
+            gate="Verdict",
+            passed=g6.passed,
+            score=g6.score,
+            reason=f"{verdict} (fallback: {exc})",
+        )
+    results.append(g7)
+
+    # -- Display results --------------------------------------------------
+    if console:
+        from rich.table import Table
+
+        table = Table(title=f"7-Gate Signal: {ticker}", show_lines=True)
+        table.add_column("Gate", style="bold")
+        table.add_column("Pass", justify="center")
+        table.add_column("Score", justify="right")
+        table.add_column("Reason")
+        table.add_column("Warnings", style="dim")
+
+        for r in results:
+            passed_str = "[bold green]PASS[/]" if r.passed else "[bold red]FAIL[/]"
+            score_str = f"{r.score:.0f}"
+            if r.score >= 70:
+                score_str = f"[green]{score_str}[/]"
+            elif r.score >= 50:
+                score_str = f"[yellow]{score_str}[/]"
+            else:
+                score_str = f"[red]{score_str}[/]"
+            warnings = "; ".join(r.warnings) if r.warnings else ""
+            table.add_row(r.gate, passed_str, score_str, r.reason, warnings)
+
+        console.print(table)
+
+        # Final verdict banner
+        final = results[-1]
+        if final.passed and final.score >= 70:
+            console.print(
+                f"\n[bold green]>>> SIGNAL: BUY {ticker} (score={final.score:.0f}) <<<[/]"
+            )
+        elif final.passed:
+            console.print(
+                f"\n[bold yellow]>>> SIGNAL: HOLD {ticker} (score={final.score:.0f}) <<<[/]"
+            )
+        else:
+            console.print(
+                f"\n[bold red]>>> SIGNAL: AVOID {ticker} (score={final.score:.0f}) <<<[/]"
+            )
+    else:
+        click.echo(f"\n7-Gate Signal: {ticker}")
+        click.echo("=" * 50)
+        for r in results:
+            status = "PASS" if r.passed else "FAIL"
+            click.echo(f"  {r.gate:15s} [{status}] score={r.score:.0f}  {r.reason}")
+            for w in r.warnings:
+                click.echo(f"    WARNING: {w}")
+        final = results[-1]
+        verdict = (
+            "BUY" if final.passed and final.score >= 70 else ("HOLD" if final.passed else "AVOID")
+        )
+        click.echo(f"\n  >>> {verdict} (score={final.score:.0f}) <<<")
+
+
 if __name__ == "__main__":
     main()

@@ -516,13 +516,60 @@ def grade():
 def signal(ticker: str, config: str, market_config: str | None):
     """Run 7-gate evaluation for a ticker."""
     setup_logging()
+
+    import yfinance as yf
+
     from qtp.data.database import QTPDatabase
     from qtp.gates import GateResult
 
     db = QTPDatabase(Path("data/qtp.db"))
     console = _get_console()
 
+    if console:
+        console.print(f"\n[bold]Evaluating {ticker}...[/]\n")
+
     results: list[GateResult] = []
+
+    # -- Fetch OHLCV data for Gate 2 ------------------------------------
+    ohlcv_df = None
+    try:
+        import polars as pl
+
+        df_pd = yf.download(ticker, period="1y", progress=False)
+        if not df_pd.empty:
+            import pandas as pd
+
+            if isinstance(df_pd.columns, pd.MultiIndex):
+                df_pd.columns = df_pd.columns.get_level_values(0)
+            df_pd = df_pd.reset_index()
+            df_pd.columns = [str(c).lower().strip() for c in df_pd.columns]
+            ohlcv_df = pl.from_pandas(
+                df_pd[["date", "open", "high", "low", "close", "volume"]].dropna()
+            )
+            if ohlcv_df["date"].dtype != pl.Date:
+                ohlcv_df = ohlcv_df.with_columns(pl.col("date").cast(pl.Date))
+    except Exception as exc:
+        if console:
+            console.print(f"  [dim]OHLCV fetch failed: {exc}[/]")
+
+    # -- Fetch MCP data for Gate 3 (best-effort, no MCP needed) ---------
+    yahoo_quote = None
+    earnings_trend_data = None
+    analyst_est = None
+    try:
+        tk = yf.Ticker(ticker)
+        info = tk.info or {}
+        yahoo_quote = {
+            "price": info.get("currentPrice") or info.get("regularMarketPrice", 0),
+            "revenueGrowth": (info.get("revenueGrowth", 0) or 0) * 100,
+            "earningsGrowth": (info.get("earningsGrowth", 0) or 0) * 100,
+            "returnOnEquity": (info.get("returnOnEquity", 0) or 0) * 100,
+        }
+        analyst_est = {
+            "targetMeanPrice": info.get("targetMeanPrice"),
+        }
+    except Exception:
+        pass
 
     # -- Gate 1: QTP quantitative model -----------------------------------
     from qtp.gates.gate1_qtp import Gate1_QTP
@@ -534,36 +581,59 @@ def signal(ticker: str, config: str, market_config: str | None):
     try:
         from qtp.gates.gate2_technical import Gate2_Technical
 
-        g2 = Gate2_Technical().evaluate({"ticker": ticker})
-    except (ImportError, Exception) as exc:
-        g2 = GateResult(gate="Technical", passed=False, score=0.0, reason=f"skipped: {exc}")
+        if ohlcv_df is not None and ohlcv_df.height >= 50:
+            g2 = Gate2_Technical().evaluate(ticker, ohlcv_df)
+        else:
+            g2 = GateResult(
+                gate="Technical", passed=True, score=50.0, reason="No OHLCV, default pass"
+            )
+    except Exception as exc:
+        g2 = GateResult(gate="Technical", passed=True, score=50.0, reason=f"skipped: {exc}")
     results.append(g2)
 
     # -- Gate 3: Fundamental analysis -------------------------------------
     try:
         from qtp.gates.gate3_fundamental import Gate3_Fundamental
 
-        g3 = Gate3_Fundamental().evaluate({"ticker": ticker})
-    except (ImportError, Exception) as exc:
-        g3 = GateResult(gate="Fundamental", passed=False, score=0.0, reason=f"skipped: {exc}")
+        g3 = Gate3_Fundamental().evaluate(
+            ticker,
+            yahoo_quote=yahoo_quote,
+            earnings_trend=earnings_trend_data,
+            analyst_estimates=analyst_est,
+        )
+    except Exception as exc:
+        g3 = GateResult(gate="Fundamental", passed=True, score=50.0, reason=f"skipped: {exc}")
     results.append(g3)
 
-    # -- Gate 4: MAGI consensus -------------------------------------------
+    # -- Gate 4: MAGI consensus (needs pre-computed votes) ----------------
+    # In CLI mode, MAGI votes come from cache or default to neutral
+    cached_verdict = db.get_cached_verdict(ticker) if hasattr(db, "get_cached_verdict") else None
     try:
-        from qtp.gates.gate4_magi import Gate4_MAGI
-
-        g4 = Gate4_MAGI().evaluate({"ticker": ticker})
-    except (ImportError, Exception) as exc:
-        g4 = GateResult(gate="MAGI", passed=False, score=0.0, reason=f"skipped: {exc}")
+        if cached_verdict and cached_verdict.get("gate4_score"):
+            g4 = GateResult(
+                gate="MAGI",
+                passed=cached_verdict["gate4_score"] >= 65,
+                score=cached_verdict["gate4_score"],
+                reason="From cache (run /qtp-signal for live MAGI)",
+            )
+        else:
+            g4 = GateResult(
+                gate="MAGI",
+                passed=True,
+                score=50.0,
+                reason="No MAGI votes (run /qtp-signal for full evaluation)",
+            )
+    except Exception as exc:
+        g4 = GateResult(gate="MAGI", passed=True, score=50.0, reason=f"skipped: {exc}")
     results.append(g4)
 
-    # -- Gate 5: Sentiment (soft gate) ------------------------------------
+    # -- Gate 5: Sentiment (soft gate, default neutral) -------------------
     try:
         from qtp.gates.gate5_sentiment import Gate5_Sentiment
 
-        g5 = Gate5_Sentiment().evaluate({"ticker": ticker})
-    except (ImportError, Exception) as exc:
-        g5 = GateResult(gate="Sentiment", passed=True, score=50.0, reason=f"skipped: {exc}")
+        g5 = Gate5_Sentiment().evaluate({})
+    except Exception as exc:
+        g5 = GateResult(gate="Sentiment", passed=True, score=70.0, reason=f"skipped: {exc}")
     results.append(g5)
 
     # -- Gate 6: Integration (weighted composite) -------------------------

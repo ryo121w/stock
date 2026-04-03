@@ -42,11 +42,11 @@ echo "  MCP data saved to alternative_data_daily" | tee -a "$LOG"
 
 # 2. Quick train
 echo "[2/5] Training (fast)..." | tee -a "$LOG"
-$VENV/qtp train -m configs/phase2_experiment.yaml --fast >> "$LOG" 2>&1
+$VENV/qtp train -m configs/phase3_best.yaml --fast >> "$LOG" 2>&1
 
 # 3. Predict
 echo "[3/5] Generating predictions..." | tee -a "$LOG"
-$VENV/qtp predict -m configs/phase2_experiment.yaml >> "$LOG" 2>&1
+$VENV/qtp predict -m configs/phase3_best.yaml >> "$LOG" 2>&1
 
 # 4. Save to JSON and push
 echo "[4/5] Saving and pushing..." | tee -a "$LOG"

@@ -9,10 +9,15 @@ Reports accuracy at confidence >= 55%.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from datetime import date
 from pathlib import Path
+
+# Prevent OpenMP thread deadlock between LightGBM and PyTorch
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import numpy as np
 

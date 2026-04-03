@@ -15,6 +15,7 @@ class FeatureTier(IntEnum):
     TIER3_FUNDAMENTAL = 3
     TIER4_MACRO = 4
     TIER5_ALTERNATIVE = 5
+    TIER6_FUNDAMENTAL_TS = 6
 
 
 @dataclass(frozen=True)

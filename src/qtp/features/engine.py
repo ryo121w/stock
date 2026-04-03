@@ -77,13 +77,14 @@ class FeatureEngine:
         # only drop rows where core features (non-Tier5) have nulls
         from qtp.features.registry import FeatureTier
 
-        core_feature_names = [f.name for f in features if f.tier != FeatureTier.TIER5_ALTERNATIVE]
+        snapshot_tiers = {FeatureTier.TIER5_ALTERNATIVE, FeatureTier.TIER6_FUNDAMENTAL_TS}
+        core_feature_names = [f.name for f in features if f.tier not in snapshot_tiers]
         core_cols = [c for c in core_feature_names if c in result.columns]
         if core_cols:
             result = result.filter(pl.all_horizontal([pl.col(c).is_not_null() for c in core_cols]))
-        # Fill remaining Tier5 nulls with 0 (neutral signal = no data)
-        tier5_names = [f.name for f in features if f.tier == FeatureTier.TIER5_ALTERNATIVE]
-        for col in tier5_names:
+        # Fill remaining Tier5/Tier6 nulls with 0 (neutral signal = no data)
+        snapshot_names = [f.name for f in features if f.tier in snapshot_tiers]
+        for col in snapshot_names:
             if col in result.columns:
                 result = result.with_columns(pl.col(col).fill_null(0.0))
 

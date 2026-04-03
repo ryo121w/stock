@@ -47,6 +47,7 @@ class PipelineRunner:
         import qtp.features.tier5_alternative  # noqa: F401
         import qtp.features.tier5_sentiment  # noqa: F401
         import qtp.features.tier5_timeseries  # noqa: F401
+        import qtp.features.tier6_fundamental_ts  # noqa: F401
 
         self.db = QTPDatabase(self.project_dir / config.data.storage_dir / "qtp.db")
         self.feature_engine = FeatureEngine(FeatureRegistry.instance(), self.storage)

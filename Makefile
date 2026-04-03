@@ -129,3 +129,10 @@ clean: ## Remove caches and build artifacts
 	find . -type d -name .mypy_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .ruff_cache -exec rm -rf {} + 2>/dev/null || true
 	rm -rf dist/ build/ *.egg-info/ htmlcov/ .coverage
+
+
+daily: ## Run daily pipeline (fetch → predict → grade → alt-data)
+	bash scripts/daily_pipeline.sh
+
+alt-data: ## Fetch alternative data (EDGAR insider + Fear&Greed)
+	$(PYTHON) -c "from qtp.data.fetchers.edgar_ import fetch_insider_transactions; from qtp.data.fetchers.fear_greed_ import fetch_fear_greed; fg = fetch_fear_greed(); print(f'F&G: {fg[\"score\"]} ({fg[\"rating\"]})')"

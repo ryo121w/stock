@@ -28,6 +28,11 @@ import qtp.features.tier2_volatility  # noqa: E402, F401
 import qtp.features.tier3_fundamental  # noqa: E402, F401
 import qtp.features.tier4_macro  # noqa: E402, F401
 import qtp.features.tier5_alternative  # noqa: E402, F401
+import qtp.features.tier5_edgar_insider  # noqa: E402, F401
+import qtp.features.tier5_fear_greed  # noqa: E402, F401
+import qtp.features.tier5_sentiment  # noqa: E402, F401
+import qtp.features.tier5_timeseries  # noqa: E402, F401
+import qtp.features.tier6_fundamental_ts  # noqa: E402, F401
 from qtp.config import PipelineConfig  # noqa: E402
 from qtp.data.database import QTPDatabase  # noqa: E402
 from qtp.data.fetchers.base import Market  # noqa: E402
@@ -40,10 +45,11 @@ logger = structlog.get_logger()
 
 
 def load_config():
+    # Use Phase5 optimized config as default
+    p5_path = project_root / "configs" / "phase5_optimized.yaml"
+    if p5_path.exists():
+        return PipelineConfig.from_yaml(p5_path)
     config_path = project_root / "configs" / "default.yaml"
-    p2_path = project_root / "configs" / "phase2_experiment.yaml"
-    if p2_path.exists():
-        return PipelineConfig.from_yamls(config_path, p2_path)
     return PipelineConfig.from_yaml(config_path)
 
 

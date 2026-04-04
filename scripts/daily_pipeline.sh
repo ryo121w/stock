@@ -37,41 +37,9 @@ log "Step 3: Grading past predictions..."
 cd "${PROJECT_DIR}" && ${VENV_PYTHON} -m qtp grade >> "${LOG_FILE}" 2>&1
 log "Step 3: Done"
 
-# Step 4: Fetch alternative data (EDGAR + Fear&Greed)
+# Step 4: Fetch alternative data (EDGAR + Fear&Greed + Finnhub)
 log "Step 4: Fetching alternative data..."
-cd "${PROJECT_DIR}" && ${VENV_PYTHON} -c "
-from qtp.data.fetchers.edgar_ import fetch_insider_transactions, clear_cache as edgar_clear
-from qtp.data.fetchers.fear_greed_ import fetch_fear_greed, clear_cache as fg_clear
-import yaml, json, sqlite3
-from pathlib import Path
-from datetime import date
-
-# Clear session caches
-edgar_clear()
-fg_clear()
-
-# Load universe
-with open('${CONFIG}') as f:
-    cfg = yaml.safe_load(f)
-tickers = cfg['universe']['tickers']
-
-# Fetch Fear & Greed
-fg = fetch_fear_greed()
-print(f'Fear & Greed: {fg.get(\"score\", \"N/A\")} ({fg.get(\"rating\", \"N/A\")})')
-
-# Fetch EDGAR for US tickers only
-for ticker in tickers:
-    if not ticker.endswith('.T'):
-        try:
-            txns = fetch_insider_transactions(ticker, months=6, max_filings=30)
-            buys = sum(1 for t in txns if t['type'] == 'BUY')
-            sells = sum(1 for t in txns if t['type'] == 'SELL')
-            print(f'{ticker}: {len(txns)} txns (B:{buys}/S:{sells})')
-        except Exception as e:
-            print(f'{ticker}: EDGAR error: {e}')
-
-print('Alternative data fetch complete.')
-" >> "${LOG_FILE}" 2>&1
+cd "${PROJECT_DIR}" && ${VENV_PYTHON} scripts/daily_alt_data.py >> "${LOG_FILE}" 2>&1
 log "Step 4: Done"
 
 # Step 5: Show summary

@@ -1,4 +1,7 @@
-"""Dual-head LightGBM: classifier (direction) + regressor (magnitude)."""
+"""Dual-head LightGBM: classifier (direction) + regressor (magnitude).
+
+Includes optional isotonic calibration to fix probability estimates.
+"""
 
 from __future__ import annotations
 
@@ -8,8 +11,10 @@ from pathlib import Path
 
 import joblib
 import lightgbm as lgb
+import numpy as np
 import polars as pl
 import structlog
+from sklearn.calibration import CalibratedClassifierCV
 
 from qtp.models.base import ModelWrapper
 
@@ -17,9 +22,16 @@ logger = structlog.get_logger()
 
 
 class LGBMPipeline(ModelWrapper):
-    def __init__(self, clf_params: dict | None = None, reg_params: dict | None = None):
+    def __init__(
+        self,
+        clf_params: dict | None = None,
+        reg_params: dict | None = None,
+        calibrate: bool = True,
+    ):
         self.clf = lgb.LGBMClassifier(**(clf_params or self._default_clf_params()))
         self.reg = lgb.LGBMRegressor(**(reg_params or self._default_reg_params()))
+        self.calibrator: CalibratedClassifierCV | None = None
+        self.calibrate = calibrate
         self.feature_names: list[str] = []
         self.version: str = ""
 
@@ -104,12 +116,29 @@ class LGBMPipeline(ModelWrapper):
         )
         logger.info("reg_early_stopped", best_iteration=self.reg.best_iteration_)
 
+        # Isotonic calibration on validation set
+        if self.calibrate and len(X_val) >= 50:
+            raw_proba = self.clf.predict_proba(X_val)[:, 1]
+            from sklearn.isotonic import IsotonicRegression
+
+            self.calibrator = IsotonicRegression(y_min=0.01, y_max=0.99, out_of_bounds="clip")
+            self.calibrator.fit(raw_proba, y_dir_val.values)
+            cal_proba = self.calibrator.predict(raw_proba)
+            logger.info(
+                "calibration_applied",
+                raw_mean=round(float(np.mean(raw_proba)), 3),
+                cal_mean=round(float(np.mean(cal_proba)), 3),
+                val_accuracy=round(float(np.mean((raw_proba >= 0.5) == y_dir_val.values)), 3),
+            )
+
         self.version = f"lgbm_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         logger.info("training_complete", version=self.version)
 
     def predict_proba(self, X: pl.DataFrame) -> list[float]:
         X_pd = X.to_pandas()
         proba = self.clf.predict_proba(X_pd)[:, 1]
+        if self.calibrator is not None:
+            proba = self.calibrator.predict(proba)
         return proba.tolist()
 
     def predict_magnitude(self, X: pl.DataFrame) -> list[float]:
@@ -127,6 +156,8 @@ class LGBMPipeline(ModelWrapper):
         path.mkdir(parents=True, exist_ok=True)
         joblib.dump(self.clf, path / "clf.joblib")
         joblib.dump(self.reg, path / "reg.joblib")
+        if self.calibrator is not None:
+            joblib.dump(self.calibrator, path / "calibrator.joblib")
         metadata = {
             "version": self.version,
             "feature_names": self.feature_names,
@@ -142,8 +173,13 @@ class LGBMPipeline(ModelWrapper):
         instance = cls()
         instance.clf = joblib.load(path / "clf.joblib")
         instance.reg = joblib.load(path / "reg.joblib")
+        cal_path = path / "calibrator.joblib"
+        if cal_path.exists():
+            instance.calibrator = joblib.load(cal_path)
         metadata = json.loads((path / "metadata.json").read_text())
         instance.version = metadata["version"]
         instance.feature_names = metadata["feature_names"]
-        logger.info("model_loaded", version=instance.version)
+        logger.info(
+            "model_loaded", version=instance.version, calibrated=instance.calibrator is not None
+        )
         return instance

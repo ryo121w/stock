@@ -1,4 +1,4 @@
-"""QTP Streamlit Dashboard — predictions, accuracy, and experiment monitoring."""
+"""QTP Streamlit Dashboard — Phase5 with EDGAR, Fear&Greed, calibration."""
 
 import sys
 from pathlib import Path
@@ -11,6 +11,7 @@ from qtp.data.database import QTPDatabase
 
 st.set_page_config(page_title="QTP Dashboard", layout="wide")
 st.title("Quant Trading Pipeline Dashboard")
+st.caption("Phase 5.2 | 53 features | 13 tickers | Sharpe 14.92 | Calibrated")
 
 DB_PATH = Path(__file__).parent.parent / "data" / "qtp.db"
 
@@ -21,7 +22,9 @@ if not DB_PATH.exists():
 db = QTPDatabase(DB_PATH)
 
 # Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Predictions", "Accuracy", "Experiments"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["Overview", "Predictions", "Accuracy", "Alt Data", "Experiments"]
+)
 
 # ── Tab 1: Overview ─────────────────────────────────────────────────────
 with tab1:
@@ -37,21 +40,38 @@ with tab1:
     else:
         st.info("No graded predictions yet. Run `make grade` first.")
 
+    # Model info
+    st.subheader("Current Model")
+    models = db.list_models(limit=1)
+    if models:
+        m = models[0]
+        st.write(f"**Version**: `{m['version']}` | **Created**: {m['created_at']}")
+
     # Accuracy trend
     st.subheader("Accuracy Trend (7-day windows)")
-    trend = db.get_accuracy_trend(window_days=7, n_windows=8)
+    trend = db.get_accuracy_trend(window_days=7, n_windows=12)
     if trend:
         trend_df = pd.DataFrame(trend)
-        trend_df = trend_df.iloc[::-1].reset_index(drop=True)  # oldest first for chart
+        trend_df = trend_df.iloc[::-1].reset_index(drop=True)
         st.line_chart(trend_df.set_index("window")["accuracy"])
     else:
         st.info("Not enough graded data for trend analysis.")
 
-    # Recent predictions
-    st.subheader("Recent Predictions")
+    # Today's signals
+    st.subheader("Latest Predictions")
     recent = db.get_recent_predictions(20)
     if recent:
         df = pd.DataFrame(recent)
+
+        # Color-code signals
+        def signal_color(row):
+            if row.get("direction") == 1 and row.get("confidence", 0) >= 0.55:
+                return "BUY"
+            elif row.get("direction") == 0 and row.get("confidence", 0) >= 0.55:
+                return "SELL"
+            return "HOLD"
+
+        df["signal"] = df.apply(signal_color, axis=1)
         st.dataframe(df, use_container_width=True)
     else:
         st.info("No predictions recorded yet.")
@@ -65,14 +85,17 @@ with tab2:
     if recent:
         df = pd.DataFrame(recent)
 
-        # Filters
         col_f1, col_f2 = st.columns(2)
         with col_f1:
             tickers = sorted(set(r["ticker"] for r in recent if r.get("ticker")))
             selected_ticker = st.selectbox("Filter by Ticker", ["All"] + tickers)
         with col_f2:
-            directions = sorted(set(r["direction"] for r in recent if r.get("direction")))
-            selected_dir = st.selectbox("Filter by Direction", ["All"] + directions)
+            directions = ["All", 1, 0]
+            selected_dir = st.selectbox(
+                "Filter by Direction",
+                directions,
+                format_func=lambda x: {1: "UP", 0: "DOWN", "All": "All"}.get(x, x),
+            )
 
         if selected_ticker != "All":
             df = df[df["ticker"] == selected_ticker]
@@ -88,32 +111,93 @@ with tab2:
 with tab3:
     import pandas as pd
 
-    st.subheader("Accuracy Analysis")
-
-    # By confidence bucket
+    st.subheader("Accuracy by Confidence")
     by_conf = db.get_accuracy_by_confidence()
     if by_conf:
-        st.write("**By Confidence Bucket**")
         conf_df = pd.DataFrame(by_conf)
         st.dataframe(conf_df, use_container_width=True)
         st.bar_chart(conf_df.set_index("bucket")["accuracy_pct"])
-    else:
-        st.info("No graded predictions yet.")
 
     st.divider()
 
-    # By ticker
+    st.subheader("Accuracy by Ticker")
     by_ticker = db.get_accuracy_by_ticker()
     if by_ticker:
-        st.write("**By Ticker**")
         ticker_df = pd.DataFrame(by_ticker)
         st.dataframe(ticker_df, use_container_width=True)
-        st.bar_chart(ticker_df.set_index("ticker")["accuracy_pct"])
+
+        # Highlight best/worst
+        if len(ticker_df) > 0:
+            best = ticker_df.iloc[0]
+            worst = ticker_df.iloc[-1]
+            col1, col2 = st.columns(2)
+            col1.metric("Best Ticker", f"{best['ticker']} ({best['accuracy_pct']}%)")
+            col2.metric("Worst Ticker", f"{worst['ticker']} ({worst['accuracy_pct']}%)")
     else:
         st.info("No graded predictions yet.")
 
-# ── Tab 4: Experiments ──────────────────────────────────────────────────
+# ── Tab 4: Alternative Data ─────────────────────────────────────────────
 with tab4:
+    import pandas as pd
+
+    st.subheader("Alternative Data Coverage")
+
+    coverage = db.alternative_coverage()
+    if coverage:
+        cov_df = pd.DataFrame(coverage)
+        st.dataframe(cov_df, use_container_width=True)
+    else:
+        st.info("No alternative data cached. Run `make alt-data` first.")
+
+    st.divider()
+
+    st.subheader("Daily Accumulation Status")
+    import sqlite3
+
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+
+    # Count records by date
+    daily_counts = conn.execute("""
+        SELECT date, COUNT(*) as records, COUNT(DISTINCT ticker) as tickers,
+               COUNT(DISTINCT tool) as tools
+        FROM alternative_data_daily
+        GROUP BY date
+        ORDER BY date DESC
+        LIMIT 14
+    """).fetchall()
+
+    if daily_counts:
+        daily_df = pd.DataFrame([dict(r) for r in daily_counts])
+        st.dataframe(daily_df, use_container_width=True)
+        st.line_chart(daily_df.set_index("date")["records"])
+        st.caption("30+ days of accumulation needed for Finnhub Tier5 features")
+    else:
+        st.info("No daily accumulation data yet. Cron runs daily at 09:00 JST.")
+
+    st.divider()
+
+    # Fear & Greed current
+    st.subheader("Fear & Greed Index")
+    fg = db.get_alternative("_market", "fear_greed")
+    if fg:
+        score = fg.get("score", 50)
+        rating = fg.get("rating", "neutral")
+        st.metric("Current Score", f"{score:.1f}", delta=rating)
+        history = fg.get("history", {})
+        if history:
+            st.write(
+                f"1 week ago: {history.get('1w', 'N/A')} | "
+                f"1 month ago: {history.get('1m', 'N/A')} | "
+                f"3 months ago: {history.get('3m', 'N/A')}"
+            )
+    else:
+        st.info("No Fear & Greed data. Run `make alt-data`.")
+
+    conn.close()
+
+# ── Tab 5: Experiments ──────────────────────────────────────────────────
+with tab5:
     import pandas as pd
 
     st.subheader("Experiment History")
@@ -126,11 +210,16 @@ with tab4:
 
     st.divider()
 
-    # Best experiments
     st.subheader("Top Experiments by AUC")
     best = db.best_experiments("wf_auc", 5)
     if best:
         best_df = pd.DataFrame(best)
         st.dataframe(best_df, use_container_width=True)
-    else:
-        st.info("No experiments with AUC scores yet.")
+
+    st.divider()
+
+    st.subheader("Top Experiments by Sharpe")
+    best_sharpe = db.best_experiments("wf_sharpe", 5)
+    if best_sharpe:
+        sharpe_df = pd.DataFrame(best_sharpe)
+        st.dataframe(sharpe_df, use_container_width=True)

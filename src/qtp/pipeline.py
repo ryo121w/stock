@@ -47,6 +47,7 @@ class PipelineRunner:
         import qtp.features.tier5_alternative  # noqa: F401
         import qtp.features.tier5_edgar_insider  # noqa: F401
         import qtp.features.tier5_fear_greed  # noqa: F401
+        import qtp.features.tier5_finnhub  # noqa: F401
         import qtp.features.tier5_sentiment  # noqa: F401
         import qtp.features.tier5_timeseries  # noqa: F401
         import qtp.features.tier6_fundamental_ts  # noqa: F401

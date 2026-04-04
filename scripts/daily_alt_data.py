@@ -60,7 +60,7 @@ def fetch_edgar(db: QTPDatabase, tickers: list[str]) -> None:
             }
 
             db.upsert_alternative(ticker, "edgar_insider", data)
-            db.upsert_alternative_daily(ticker, "edgar_insider", today, data)
+            db.upsert_alternative_daily(ticker, "edgar_insider", data, today)
             logger.info("edgar_saved", ticker=ticker, buys=buys, sells=sells)
         except Exception as e:
             logger.warning("edgar_failed", ticker=ticker, error=str(e))
@@ -76,7 +76,7 @@ def fetch_fear_greed(db: QTPDatabase) -> None:
     try:
         data = fetch_fear_greed()
         db.upsert_alternative("_market", "fear_greed", data)
-        db.upsert_alternative_daily("_market", "fear_greed", today, data)
+        db.upsert_alternative_daily("_market", "fear_greed", data, today)
         logger.info("fear_greed_saved", score=data.get("score"), rating=data.get("rating"))
     except Exception as e:
         logger.warning("fear_greed_failed", error=str(e))
@@ -116,7 +116,7 @@ def fetch_finnhub(db: QTPDatabase, tickers: list[str]) -> None:
                 data = fetch_fn(ticker)
                 if data:
                     db.upsert_alternative(ticker, tool_name, data)
-                    db.upsert_alternative_daily(ticker, tool_name, today, data)
+                    db.upsert_alternative_daily(ticker, tool_name, data, today)
             except Exception as e:
                 logger.warning("finnhub_tool_failed", ticker=ticker, tool=tool_name, error=str(e))
 

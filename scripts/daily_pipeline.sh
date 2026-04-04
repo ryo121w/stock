@@ -9,6 +9,11 @@
 set -euo pipefail
 
 PROJECT_DIR="/Users/wakiryoutarou/quant-trading-pipeline"
+
+# Load .env if exists (for FINNHUB_API_KEY etc.)
+if [ -f "${PROJECT_DIR}/.env" ]; then
+    set -a; source "${PROJECT_DIR}/.env"; set +a
+fi
 VENV_PYTHON="${PROJECT_DIR}/.venv/bin/python"
 CONFIG="${PROJECT_DIR}/configs/phase5_optimized.yaml"
 LOG_DIR="${PROJECT_DIR}/data/logs"

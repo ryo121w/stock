@@ -84,7 +84,7 @@ def fear_greed_score(df: pl.DataFrame) -> pl.Series:
     n = df.height
     history = _get_history()
     if not history:
-        return pl.Series("fear_greed_score", [50.0] * n, dtype=pl.Float64)
+        return pl.Series("fear_greed_score", [0.5] * n, dtype=pl.Float64)
 
     date_map = _build_date_map(history)
     dates = df["date"].to_list()
@@ -93,7 +93,7 @@ def fear_greed_score(df: pl.DataFrame) -> pl.Series:
     for d in dates:
         d = _parse_date(d)
         if d is None:
-            result.append(50.0)
+            result.append(0.5)
             continue
         # Normalize to 0-1 range for consistency with other features
         score = _lookup_score(date_map, d) / 100.0

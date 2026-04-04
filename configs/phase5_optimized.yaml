@@ -1,6 +1,7 @@
-# Phase 5.1: Optimized — 54 features (50 base + 4 EDGAR/F&G), 13 tickers
-# Removed: MSFT (51.0%), V (50.2%), 6758.T Sony (36.4% = inverse signal)
-# WF Accuracy: 66.1% → TBD after Sony removal
+# Phase 5.2: Optimized — 53 features, 13 tickers, calibrated
+# WF (133 fold): Accuracy 62.9% | Sharpe 14.92 | Win Rate 67.0%
+# Removed tickers: MSFT (51.0%), V (50.2%), 6758.T Sony (36.4%)
+# Removed features: 19 zero/low-importance
 
 data:
   history_days: 2520   # ~7-10 years of OHLCV for backtesting
@@ -32,6 +33,7 @@ features:
     - "vix_change_5d"
     - "news_sentiment_avg"
     - "net_income_acceleration"
+    - "fear_greed_change_7d"
 
 universe:
   tickers:
